@@ -123,10 +123,6 @@ Operations are logged to `~/.cache/smbmnt/smbmnt.log` for troubleshooting.
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
-## Contributing
-
-Contributions are welcome! Please submit pull requests or open issues on [GitHub](https://github.com/appaKappaK/smbmnt). Check the script for coding style and test changes thoroughly.
-
 ## Notes
 
 - Ensure `nmap` and `smbclient` are installed:
