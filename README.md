@@ -100,4 +100,4 @@ The script automatically:
 
 ## License
 
-MIT License
+CC0 1.0
