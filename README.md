@@ -1,136 +1,103 @@
-# SMBmnt - Universal Samba Mount Command
-
-A powerful Bash script for mounting, unmounting, and managing Samba (SMB) shares with network discovery capabilities. This script simplifies connecting to Samba servers, scanning for shares, and managing mounts with a user-friendly interface.
-
+# smbmnt 
 ## Features
 
-- **Mount/Unmount Shares**: Mount or unmount Samba shares with a single command.
-- **Network Discovery**: Scan local networks for Samba servers using `nmap`.
-- **Share Scanning**: List available shares on a specified server.
-- **Fstab Generation**: Generate `/etc/fstab` entries for persistent mounts.
-- **Dry Run Mode**: Simulate operations without executing them.
-- **Status Dashboard**: View the status of mounted shares.
-- **Interactive Mode**: User-friendly interface for selecting shares and servers.
-- **Secure Configuration**: Validates credentials file permissions and uses modern SMB protocol versions (default: 3.1.1).
-- **Logging**: Detailed logs for troubleshooting in `~/.cache/smbmnt/smbmnt.log`.
-- **Side Panel Integration**: Adds mounted shares to file manager bookmarks (GTK-based) and creates desktop symlinks.
+- **Network Discovery**: Automatically scan networks for SMB servers using nmap
+- **Share Discovery**: List available shares on discovered servers
+- **Interactive & Command-line Modes**: Full menu-driven interface or direct command execution
+- **Mount Management**: Mount/unmount individual shares or all at once
+- **Desktop Integration**: Automatic GTK bookmarks and home directory symlinks
+- **Status Dashboard**: View mounted shares and system status
+- **fstab Generation**: Create persistent mount configurations
+- **Logging**: Comprehensive logging with timestamps
 
 ## Requirements
 
-- Bash shell
-- `nmap` (for network discovery)
-- `smbclient` (for share scanning)
-- `mount` and `umount` (standard on Linux systems)
-- Sudo privileges for mounting, unmounting, and editing `/etc/fstab`
-- A Samba credentials file with secure permissions (`chmod 600`)
+- **Required**: `smbclient`, `nmap` (auto-installed if missing)
+- **Permissions**: sudo access for mounting/unmounting
+- **Credentials**: SMB credentials file with proper permissions (600)
 
 ## Installation
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/appaKappaK/smbmnt.git
-   cd smbmnt
-   ```
-2. Make the script executable:
-   ```bash
-   chmod +x smbmnt
-   ```
-3. Optionally, move the script to a directory in your PATH:
-   ```bash
-   sudo mv smbmnt /usr/local/bin/
-   ```
+1. Copy script to `/usr/local/bin/smbmnt`
+2. Make executable: `chmod +x /usr/local/bin/smbmnt`
+3. Create credentials file: `~/.smbcredentials`
+
+### Credentials File Format
+
+```
+username=your_username
+password=your_password
+domain=your_domain
+```
+
+Set secure permissions: `chmod 600 ~/.smbcredentials`
 
 ## Configuration
 
-Edit the user configuration section at the top of the `smbmnt` script to set:
+Edit the script variables at the top:
 
-- `DEFAULT_SERVER`: Your primary Samba server IP or hostname (e.g., `10.8.0.1` for WireGuard setups).
-- `DEFAULT_CREDENTIALS`: Path to your Samba credentials file (format: `username=your_username`, `password=your_password`, `domain=your_domain` (optional)).
-- `DEFAULT_SHARES`: Array of commonly accessed share names (e.g., `Media-Drive1`, `shared`).
-- `MOUNT_BASE`: Directory where shares will be mounted (e.g., `/mnt`).
-- `NETWORK_SCAN_PREFERENCE`: Optional network range for scanning (e.g., `192.168.1.0/24`).
-- `SMB_VERSION`: Preferred SMB protocol version (default: `3.1.1`).
-
-Ensure your credentials file is secure:
 ```bash
-chmod 600 ~/.smbcredentials
+DEFAULT_SERVER="10.8.0.1"                    # Default SMB server
+DEFAULT_SHARES=("Media-Drive1" "shared")      # Available shares
+MOUNT_BASE="/mnt"                             # Mount directory base
 ```
 
 ## Usage
 
+### Network Discovery
 ```bash
-smbmnt [OPTIONS] [CHOICE]
+smbmnt --scan                     # Auto-detect and scan local network
+smbmnt --scan 192.168.1.0/24     # Scan specific network
+smbmnt --scan-shares 10.8.0.1    # List shares on specific server
+smbmnt --discovered               # Use previously discovered servers
 ```
 
-### Options
+### Mount Operations
+```bash
+smbmnt                    # Interactive mode
+smbmnt 1                  # Mount share #1
+smbmnt 1,3,5             # Mount shares 1, 3, and 5
+smbmnt all               # Mount all shares
+smbmnt --unmount 1       # Unmount share #1
+smbmnt --unmount all     # Unmount all shares
+```
 
-- `-s, --server IP`: Specify Samba server IP/hostname.
-- `-c, --credentials`: Specify credentials file.
-- `-m, --mount-base`: Specify base mount directory.
-- `-l, --list`: List available shares.
-- `-u, --unmount`: Unmount shares instead of mounting.
-- `--scan [NETWORK]`: Discover SMB servers on the network.
-- `--scan-shares IP`: List shares on a specific server.
-- `--status`: Show mount status dashboard.
-- `--discovered`: Use previously discovered servers.
-- `--dry-run`: Simulate operations without executing.
-- `--fstab`: Generate `/etc/fstab` entries.
-- `-h, --help`: Show help.
+### System Management
+```bash
+smbmnt --status          # Show mount status dashboard
+smbmnt --list            # List available shares
+smbmnt --fstab 1,2       # Generate fstab entries for shares 1,2
+```
 
-### Choices
+### Advanced Options
+```bash
+smbmnt -s 192.168.1.100  # Use different server
+smbmnt -c /path/to/creds # Use different credentials file
+smbmnt -m /media         # Use different mount base directory
+```
 
-- `1-N`: Mount/unmount a specific share number.
-- `1,2,3`: Mount/unmount multiple shares (comma-separated).
-- `all`: Mount/unmount all shares.
-- `(none)`: Enter interactive mode.
+## File Locations
 
-### Examples
+- **Log file**: `~/.cache/smbmnt/smbmnt.log`
+- **Cache directory**: `~/.cache/smbmnt/`
+- **Discovered servers**: `~/.cache/smbmnt/discovered_servers`
+- **Default credentials**: `~/.smbcredentials`
+- **Mount points**: `/mnt/samba-sharename` (configurable)
 
-- Scan for Samba servers:
-  ```bash
-  smbmnt --scan
-  ```
-- List shares on a server:
-  ```bash
-  smbmnt --scan-shares 10.8.0.1
-  ```
-- Mount a specific share:
-  ```bash
-  smbmnt 1
-  ```
-- Mount multiple shares:
-  ```bash
-  smbmnt 1,2,3
-  ```
-- Unmount all shares:
-  ```bash
-  smbmnt -u all
-  ```
-- Generate fstab entries:
-  ```bash
-  smbmnt --fstab 1,2
-  ```
-- Show status dashboard:
-  ```bash
-  smbmnt --status
-  ```
+## Desktop Integration
 
-## Logging
+The script automatically:
+- Adds mounted shares to GTK file manager bookmarks
+- Creates symlinks in home directory (`~/Samba-ShareName`)
+- Removes bookmarks and symlinks when unmounting
 
-Operations are logged to `~/.cache/smbmnt/smbmnt.log` for troubleshooting.
+## Troubleshooting
+
+- **Permission denied**: Ensure credentials file has 600 permissions
+- **Mount failures**: Check logs at `~/.cache/smbmnt/smbmnt.log`
+- **Network discovery issues**: Verify nmap is installed and network is accessible
+- **Share access**: Test with `smbclient -L //server-ip -A ~/.smbcredentials`
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-## Notes
-
-- Ensure `nmap` and `smbclient` are installed:
-  ```bash
-  sudo apt-get install nmap smbclient  # Debian/Ubuntu
-  sudo dnf install nmap samba-client  # Fedora/RHEL
-  sudo pacman -S nmap smbclient       # Arch Linux
-  ```
-- The script requires sudo for mounting, unmounting, and editing `/etc/fstab`.
-- For WireGuard setups (e.g., `10.8.0.1`), ensure the server is accessible via the VPN interface.
-- Keep your credentials file secure to prevent unauthorized access.
+MIT License
