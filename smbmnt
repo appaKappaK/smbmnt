@@ -99,7 +99,7 @@ show_usage() {
     echo "  smbmnt --scan-shares 10.8.0.1   # List shares on server"
     echo "  smbmnt --discovered              # Use discovered servers"
     echo "  smbmnt --status                  # Show dashboard"
-    echo "  smbmnt --fstab 1,2              # Generate fstab for shares 1,2"
+    echo "  smbmnt --fstab 1,2              # Generate fstab for shares 1,2..."
 }
 
 detect_network() {
