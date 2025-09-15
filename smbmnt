@@ -72,9 +72,6 @@ check_dependencies() {
 }
 
 show_usage() {
-    echo "Universal Samba Mount Command (smbmnt) - Version 2.0.0"
-    echo "License: MIT"
-    echo ""
     echo "Usage: smbmnt [OPTIONS] [CHOICE]"
     echo ""
     echo "OPTIONS:"
