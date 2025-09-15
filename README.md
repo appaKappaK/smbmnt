@@ -12,7 +12,7 @@
 
 ## Requirements
 
-- **Required**: `smbclient`, `nmap` (auto-installed if missing)
+- **Required**: `smbclient`, `nmap` 
 - **Permissions**: sudo access for mounting/unmounting
 - **Credentials**: SMB credentials file with proper permissions (600)
 
