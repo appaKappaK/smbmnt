@@ -97,7 +97,3 @@ The script automatically:
 - **Mount failures**: Check logs at `~/.cache/smbmnt/smbmnt.log`
 - **Network discovery issues**: Verify nmap is installed and network is accessible
 - **Share access**: Test with `smbclient -L //server-ip -A ~/.smbcredentials`
-
-## License
-
-CC0 1.0
