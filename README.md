@@ -7,7 +7,7 @@
 - **Mount Management**: Mount/unmount individual shares or all at once
 - **Desktop Integration**: Automatic GTK bookmarks and home directory symlinks
 - **Status Dashboard**: View mounted shares and system status
-- **fstab Edit**: Create persistent mount configurations
+- **fstab Add Entry**: Create persistent mount configurations
 - **Logging**: Comprehensive logging with timestamps
 
 ## Requirements
