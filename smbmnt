@@ -1,9 +1,9 @@
 #!/bin/bash
 
-DEFAULT_SERVER="10.8.0.1"
+DEFAULT_SERVER="YOURSERVERIP"
 DEFAULT_CREDENTIALS="$HOME/.smbcredentials"
-DEFAULT_SHARES=("Media-Drive1" "Media-Drive2" "Media-Drive3" "shared" "plex")
-MOUNT_BASE="/mnt"
+DEFAULT_SHARES=("YOURSHARENAME")
+MOUNT_BASE="/smb"
 CACHE_DIR="$HOME/.cache/smbmnt"
 NETWORK_SCAN_PREFERENCE=""
 SMB_VERSION="3.1.1"
