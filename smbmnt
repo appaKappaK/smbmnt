@@ -139,28 +139,28 @@ discover_servers() {
         fi
     fi
     
-    log_message "INFO" "${BLUE}Scanning network $network...${NC}"
+    echo "Scanning network $network..."
     
     if ! check_dependency "nmap"; then
         read -r -p "Install nmap? (y/N): " install_choice
         if [[ "$install_choice" =~ ^[Yy]$ ]]; then
-            log_message "INFO" "${YELLOW}Installing nmap...${NC}"
+            echo "Installing nmap..."
             sudo dnf install -y nmap 2>/dev/null || \
             sudo apt-get install -y nmap 2>/dev/null || \
             sudo pacman -S --noconfirm nmap 2>/dev/null || \
             sudo yum install -y nmap 2>/dev/null
             
             if ! command -v nmap &> /dev/null; then
-                log_message "ERROR" "${RED}Could not install nmap. Install manually and retry.${NC}"
+                echo "Error: Could not install nmap. Install manually and retry."
                 return 1
             fi
         else
-            log_message "ERROR" "${RED}nmap required for scanning. Install manually.${NC}"
+            echo "Error: nmap required for scanning. Install manually."
             return 1
         fi
     fi
     
-    log_message "INFO" "${YELLOW}Scanning (30-60 seconds)...${NC}"
+    echo "Running scan (30-60 seconds)..."
     
     local temp_file
     temp_file=$(mktemp)
@@ -181,36 +181,46 @@ discover_servers() {
     rm "$temp_file"
     
     if [ ${#servers[@]} -eq 0 ]; then
-        log_message "ERROR" "${RED}No SMB servers found on $network${NC}"
+        echo "No SMB servers found on $network"
         return 1
     fi
     
-    log_message "INFO" "${GREEN}Found ${#servers[@]} SMB server(s):${NC}"
+    echo "Found ${#servers[@]} SMB server(s)"
     
-    : > "$DISCOVERED_SERVERS_FILE"
+    if [ -s "$DISCOVERED_SERVERS_FILE" ]; then
+        read -r -p "Refresh discovered servers cache? (y/N): " refresh_choice
+        if [[ "$refresh_choice" =~ ^[Yy]$ ]]; then
+            : > "$DISCOVERED_SERVERS_FILE"
+            echo "Cache cleared. Starting fresh."
+        else
+            echo "Appending new servers to existing cache..."
+        fi
+    fi
     
     for i in "${!servers[@]}"; do
         local ip="${servers[$i]}"
         local hostname=""
         
-        log_message "INFO" "${CYAN}Testing server $ip...${NC}"
+        echo "Testing server $ip..."
         
-        hostname=$(nslookup "$ip" 2>/dev/null | grep "name =" | awk '{print $4}' | sed 's/\.$//')
+        hostname=$(nslookup "$ip" 2>/dev/null | grep "name =" | awk '{print $4}' | sed 's/\.$//' | tr '[:upper:]' '[:lower:]')
         if [ -z "$hostname" ] && command -v nmblookup &> /dev/null; then
-            hostname=$(nmblookup -A "$ip" 2>/dev/null | grep "<00>" | head -n1 | awk '{print $1}')
+            hostname=$(nmblookup -A "$ip" 2>/dev/null | grep "<00>" | head -n1 | awk '{print $1}' | tr '[:upper:]' '[:lower:]')
         fi
         
         if [ -n "$hostname" ]; then
-            log_message "INFO" "   ${GREEN}$((i+1))) $ip ($hostname)${NC}"
+            echo "$((i+1))) $ip ($hostname)"
             echo "$ip:$hostname" >> "$DISCOVERED_SERVERS_FILE"
         else
-            log_message "INFO" "   ${GREEN}$((i+1))) $ip${NC}"
+            echo "$((i+1))) $ip"
             echo "$ip:" >> "$DISCOVERED_SERVERS_FILE"
         fi
     done
     
-    log_message "INFO" "${PURPLE}Discovered servers saved to cache${NC}"
-    log_message "INFO" "${YELLOW}Use 'smbmnt --discovered' to mount from discovered servers${NC}"
+    sort -u -o "$DISCOVERED_SERVERS_FILE" "$DISCOVERED_SERVERS_FILE"
+    
+    echo "Discovered servers saved to cache"
+    echo "Use 'smbmnt --discovered' to mount from discovered servers"
 }
 
 scan_shares() {
