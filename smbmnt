@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# Get the actual user's home directory, not root's when using sudo
 if [ -n "$SUDO_USER" ]; then
     ACTUAL_USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
 else
