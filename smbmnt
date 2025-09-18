@@ -1,10 +1,17 @@
 #!/bin/bash
 
+# Get the actual user's home directory, not root's when using sudo
+if [ -n "$SUDO_USER" ]; then
+    ACTUAL_USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+else
+    ACTUAL_USER_HOME="$HOME"
+fi
+
 DEFAULT_SERVER="YOURSERVERIP"
-DEFAULT_CREDENTIALS="$HOME/.smbcredentials"
+DEFAULT_CREDENTIALS="$ACTUAL_USER_HOME/.smbcredentials"
 DEFAULT_SHARES=("YOURSHARENAME1" "YOURSHARENAME2" ...)
 MOUNT_BASE="/mnt" # or /smb 
-CACHE_DIR="$HOME/.cache/smbmnt"
+CACHE_DIR="$ACTUAL_USER_HOME/.cache/smbmnt"
 NETWORK_SCAN_PREFERENCE=""
 SMB_VERSION="3.1.1"
 LOG_FILE="$CACHE_DIR/smbmnt.log"
