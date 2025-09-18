@@ -226,6 +226,45 @@ discover_servers() {
     echo "Use 'smbmnt --discovered' to mount from discovered servers"
 }
 
+update_script_config() {
+    local selected_server="$1"
+    shift
+    local discovered_shares=("$@")
+    
+    local script_path="${BASH_SOURCE[0]}"
+    local temp_file=$(mktemp)
+    
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^DEFAULT_SERVER= ]]; then
+            echo "DEFAULT_SERVER=\"$selected_server\""
+        elif [[ "$line" =~ ^DEFAULT_SHARES= ]]; then
+            printf "DEFAULT_SHARES=("
+            for share in "${discovered_shares[@]}"; do
+                printf "\"%s\" " "$share"
+            done
+            printf ")\n"
+        else
+            echo "$line"
+        fi
+    done < "$script_path" > "$temp_file"
+    
+    if [ -w "$script_path" ]; then
+        if cp "$script_path" "${script_path}.backup.$(date +%Y%m%d_%H%M%S)" && mv "$temp_file" "$script_path" && chmod +x "$script_path"; then
+            log_message "INFO" "${GREEN}Configuration updated! Server: $selected_server, Shares: ${discovered_shares[*]}${NC}"
+            return 0
+        fi
+    else
+        if sudo cp "$script_path" "${script_path}.backup.$(date +%Y%m%d_%H%M%S)" && sudo mv "$temp_file" "$script_path" && sudo chmod +x "$script_path"; then
+            log_message "INFO" "${GREEN}Configuration updated! Server: $selected_server, Shares: ${discovered_shares[*]}${NC}"
+            return 0
+        fi
+    fi
+    
+    log_message "ERROR" "${RED}Failed to update configuration${NC}"
+    rm -f "$temp_file"
+    return 1
+}
+
 scan_shares() {
     local server_ip="$1"
     
@@ -241,34 +280,26 @@ scan_shares() {
     if ! check_dependency "smbclient"; then
         read -r -p "Install smbclient? (y/N): " install_choice
         if [[ "$install_choice" =~ ^[Yy]$ ]]; then
-            log_message "INFO" "${YELLOW}Installing smbclient...${NC}"
-            sudo dnf install -y samba-client 2>/dev/null || \
-            sudo apt-get install -y smbclient 2>/dev/null || \
-            sudo pacman -S --noconfirm smbclient 2>/dev/null || \
-            sudo yum install -y samba-client 2>/dev/null
-            
+            sudo dnf install -y samba-client 2>/dev/null || sudo apt-get install -y smbclient 2>/dev/null || sudo pacman -S --noconfirm smbclient 2>/dev/null || sudo yum install -y samba-client 2>/dev/null
             if ! command -v smbclient &> /dev/null; then
-                log_message "ERROR" "${RED}Could not install smbclient. Install manually and retry.${NC}"
+                log_message "ERROR" "${RED}Could not install smbclient${NC}"
                 return 1
             fi
         else
-            log_message "ERROR" "${RED}smbclient required for scanning. Install manually.${NC}"
+            log_message "ERROR" "${RED}smbclient required${NC}"
             return 1
         fi
     fi
     
-    log_message "INFO" "${YELLOW}Attempting anonymous connection...${NC}"
-    
     local shares_output
     if ! shares_output=$(smbclient -L "$server_ip" -N 2>/dev/null); then
         if [ -f "$CREDENTIALS" ]; then
-            log_message "INFO" "${YELLOW}Trying with credentials...${NC}"
             if ! shares_output=$(smbclient -L "$server_ip" -A "$CREDENTIALS" 2>/dev/null); then
                 log_message "ERROR" "${RED}Could not connect to $server_ip${NC}"
                 return 1
             fi
         else
-            log_message "ERROR" "${RED}Could not connect to $server_ip and no credentials file found${NC}"
+            log_message "ERROR" "${RED}Could not connect to $server_ip${NC}"
             return 1
         fi
     fi
@@ -277,91 +308,19 @@ scan_shares() {
     mapfile -t shares < <(echo "$shares_output" | grep "Disk" | awk '{print $1}' | grep -v "^$" | grep -v "IPC\$" | grep -v "print\$")
     
     if [ ${#shares[@]} -eq 0 ]; then
-        log_message "ERROR" "${RED}No shares found on $server_ip${NC}"
+        log_message "ERROR" "${RED}No shares found${NC}"
         return 1
     fi
     
-    log_message "INFO" "${GREEN}Found ${#shares[@]} share(s) on $server_ip:${NC}"
-    
+    log_message "INFO" "${GREEN}Found ${#shares[@]} shares:${NC}"
     for i in "${!shares[@]}"; do
-        log_message "INFO" "   ${GREEN}$((i+1))) ${shares[$i]}${NC}"
+        log_message "INFO" "   $((i+1))) ${shares[$i]}"
     done
     
     echo
-    read -r -p "Auto-configure this script with these settings? (y/N): " auto_config
+    read -r -p "Auto-configure script with these settings? (y/N): " auto_config
     if [[ "$auto_config" =~ ^[Yy]$ ]]; then
         update_script_config "$server_ip" "${shares[@]}"
-    else
-        log_message "INFO" "${YELLOW}Add these shares to DEFAULT_SHARES in config${NC}"
-    fi
-}
-
-update_script_config() {
-    local selected_server="$1"
-    shift
-    local discovered_shares=("$@")
-    
-    local script_path="${BASH_SOURCE[0]}"
-    
-    if [ ! -w "$script_path" ]; then
-        log_message "INFO" "${YELLOW}Script requires sudo to update. Updating with sudo...${NC}"
-        
-        local temp_file=$(mktemp)
-        
-        while IFS= read -r line; do
-            if [[ "$line" =~ ^DEFAULT_SERVER= ]]; then
-                echo "DEFAULT_SERVER=\"$selected_server\""
-            elif [[ "$line" =~ ^DEFAULT_SHARES= ]]; then
-                printf "DEFAULT_SHARES=("
-                for share in "${discovered_shares[@]}"; do
-                    printf "\"%s\" " "$share"
-                done
-                printf ")\n"
-            else
-                echo "$line"
-            fi
-        done < "$script_path" > "$temp_file"
-        
-        if sudo cp "$script_path" "${script_path}.backup.$(date +%Y%m%d_%H%M%S)" && sudo mv "$temp_file" "$script_path" && sudo chmod +x "$script_path"; then
-            log_message "INFO" "${GREEN}Script configuration updated successfully!${NC}"
-            log_message "INFO" "${CYAN}Server: $selected_server${NC}"
-            log_message "INFO" "${CYAN}Shares: ${discovered_shares[*]}${NC}"
-            return 0
-        else
-            log_message "ERROR" "${RED}Failed to update script configuration${NC}"
-            rm -f "$temp_file"
-            return 1
-        fi
-    else
-        cp "$script_path" "${script_path}.backup.$(date +%Y%m%d_%H%M%S)"
-        
-        local temp_file=$(mktemp)
-        
-        while IFS= read -r line; do
-            if [[ "$line" =~ ^DEFAULT_SERVER= ]]; then
-                echo "DEFAULT_SERVER=\"$selected_server\""
-            elif [[ "$line" =~ ^DEFAULT_SHARES= ]]; then
-                printf "DEFAULT_SHARES=("
-                for share in "${discovered_shares[@]}"; do
-                    printf "\"%s\" " "$share"
-                done
-                printf ")\n"
-            else
-                echo "$line"
-            fi
-        done < "$script_path" > "$temp_file"
-        
-        if mv "$temp_file" "$script_path"; then
-            chmod +x "$script_path"
-            log_message "INFO" "${GREEN}Script configuration updated successfully!${NC}"
-            log_message "INFO" "${CYAN}Server: $selected_server${NC}"
-            log_message "INFO" "${CYAN}Shares: ${discovered_shares[*]}${NC}"
-            return 0
-        else
-            log_message "ERROR" "${RED}Failed to update script configuration${NC}"
-            rm -f "$temp_file"
-            return 1
-        fi
     fi
 }
 
