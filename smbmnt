@@ -1,16 +1,10 @@
 #!/bin/bash
 
-if [ -n "$SUDO_USER" ]; then
-    ACTUAL_USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
-else
-    ACTUAL_USER_HOME="$HOME"
-fi
-
 DEFAULT_SERVER="YOURSERVERIP"
-DEFAULT_CREDENTIALS="$ACTUAL_USER_HOME/.smbcredentials"
-DEFAULT_SHARES=("YOURSHARENAME1" "YOURSHARENAME2" ...)
-MOUNT_BASE="/mnt" # or /smb 
-CACHE_DIR="$ACTUAL_USER_HOME/.cache/smbmnt"
+DEFAULT_CREDENTIALS="$HOME/.smbcredentials"
+DEFAULT_SHARES=("shared" "Media-Drive1" "Media-Drive2" "Media-Drive3")
+MOUNT_BASE="/smb"
+CACHE_DIR="$HOME/.cache/smbmnt"
 NETWORK_SCAN_PREFERENCE=""
 SMB_VERSION="3.1.1"
 LOG_FILE="$CACHE_DIR/smbmnt.log"
@@ -78,6 +72,9 @@ check_dependencies() {
 }
 
 show_usage() {
+    echo "Universal Samba Mount Command (smbmnt) - Version 2.0.0"
+    echo "License: MIT"
+    echo ""
     echo "Usage: smbmnt [OPTIONS] [CHOICE]"
     echo ""
     echo "OPTIONS:"
@@ -105,7 +102,7 @@ show_usage() {
     echo "  smbmnt --scan-shares 10.8.0.1   # List shares on server"
     echo "  smbmnt --discovered              # Use discovered servers"
     echo "  smbmnt --status                  # Show dashboard"
-    echo "  smbmnt --fstab 1,2              # Generate fstab for shares 1,2..."
+    echo "  smbmnt --fstab 1,2              # Generate fstab for shares 1,2"
 }
 
 detect_network() {
@@ -167,6 +164,7 @@ discover_servers() {
     
     local temp_file
     temp_file=$(mktemp)
+    # shellcheck disable=SC2086
     nmap $NMAP_OPTIONS "$network" 2>/dev/null | grep -E "Nmap scan report|445/tcp" > "$temp_file"
     
     local servers=()
@@ -226,45 +224,6 @@ discover_servers() {
     echo "Use 'smbmnt --discovered' to mount from discovered servers"
 }
 
-update_script_config() {
-    local selected_server="$1"
-    shift
-    local discovered_shares=("$@")
-    
-    local script_path="${BASH_SOURCE[0]}"
-    local temp_file=$(mktemp)
-    
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^DEFAULT_SERVER= ]]; then
-            echo "DEFAULT_SERVER=\"$selected_server\""
-        elif [[ "$line" =~ ^DEFAULT_SHARES= ]]; then
-            printf "DEFAULT_SHARES=("
-            for share in "${discovered_shares[@]}"; do
-                printf "\"%s\" " "$share"
-            done
-            printf ")\n"
-        else
-            echo "$line"
-        fi
-    done < "$script_path" > "$temp_file"
-    
-    if [ -w "$script_path" ]; then
-        if cp "$script_path" "${script_path}.backup.$(date +%Y%m%d_%H%M%S)" && mv "$temp_file" "$script_path" && chmod +x "$script_path"; then
-            log_message "INFO" "${GREEN}Configuration updated! Server: $selected_server, Shares: ${discovered_shares[*]}${NC}"
-            return 0
-        fi
-    else
-        if sudo cp "$script_path" "${script_path}.backup.$(date +%Y%m%d_%H%M%S)" && sudo mv "$temp_file" "$script_path" && sudo chmod +x "$script_path"; then
-            log_message "INFO" "${GREEN}Configuration updated! Server: $selected_server, Shares: ${discovered_shares[*]}${NC}"
-            return 0
-        fi
-    fi
-    
-    log_message "ERROR" "${RED}Failed to update configuration${NC}"
-    rm -f "$temp_file"
-    return 1
-}
-
 scan_shares() {
     local server_ip="$1"
     
@@ -280,26 +239,34 @@ scan_shares() {
     if ! check_dependency "smbclient"; then
         read -r -p "Install smbclient? (y/N): " install_choice
         if [[ "$install_choice" =~ ^[Yy]$ ]]; then
-            sudo dnf install -y samba-client 2>/dev/null || sudo apt-get install -y smbclient 2>/dev/null || sudo pacman -S --noconfirm smbclient 2>/dev/null || sudo yum install -y samba-client 2>/dev/null
+            log_message "INFO" "${YELLOW}Installing smbclient...${NC}"
+            sudo dnf install -y samba-client 2>/dev/null || \
+            sudo apt-get install -y smbclient 2>/dev/null || \
+            sudo pacman -S --noconfirm smbclient 2>/dev/null || \
+            sudo yum install -y samba-client 2>/dev/null
+            
             if ! command -v smbclient &> /dev/null; then
-                log_message "ERROR" "${RED}Could not install smbclient${NC}"
+                log_message "ERROR" "${RED}Could not install smbclient. Install manually and retry.${NC}"
                 return 1
             fi
         else
-            log_message "ERROR" "${RED}smbclient required${NC}"
+            log_message "ERROR" "${RED}smbclient required for scanning. Install manually.${NC}"
             return 1
         fi
     fi
     
+    log_message "INFO" "${YELLOW}Attempting anonymous connection...${NC}"
+    
     local shares_output
     if ! shares_output=$(smbclient -L "$server_ip" -N 2>/dev/null); then
         if [ -f "$CREDENTIALS" ]; then
+            log_message "INFO" "${YELLOW}Trying with credentials...${NC}"
             if ! shares_output=$(smbclient -L "$server_ip" -A "$CREDENTIALS" 2>/dev/null); then
                 log_message "ERROR" "${RED}Could not connect to $server_ip${NC}"
                 return 1
             fi
         else
-            log_message "ERROR" "${RED}Could not connect to $server_ip${NC}"
+            log_message "ERROR" "${RED}Could not connect to $server_ip and no credentials file found${NC}"
             return 1
         fi
     fi
@@ -308,20 +275,17 @@ scan_shares() {
     mapfile -t shares < <(echo "$shares_output" | grep "Disk" | awk '{print $1}' | grep -v "^$" | grep -v "IPC\$" | grep -v "print\$")
     
     if [ ${#shares[@]} -eq 0 ]; then
-        log_message "ERROR" "${RED}No shares found${NC}"
+        log_message "ERROR" "${RED}No shares found on $server_ip${NC}"
         return 1
     fi
     
-    log_message "INFO" "${GREEN}Found ${#shares[@]} shares:${NC}"
+    log_message "INFO" "${GREEN}Found ${#shares[@]} share(s) on $server_ip:${NC}"
+    
     for i in "${!shares[@]}"; do
-        log_message "INFO" "   $((i+1))) ${shares[$i]}"
+        log_message "INFO" "   ${GREEN}$((i+1))) ${shares[$i]}${NC}"
     done
     
-    echo
-    read -r -p "Auto-configure script with these settings? (y/N): " auto_config
-    if [[ "$auto_config" =~ ^[Yy]$ ]]; then
-        update_script_config "$server_ip" "${shares[@]}"
-    fi
+    log_message "INFO" "${YELLOW}Add these shares to DEFAULT_SHARES in config${NC}"
 }
 
 generate_fstab() {
