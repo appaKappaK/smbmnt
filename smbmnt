@@ -287,7 +287,63 @@ scan_shares() {
         log_message "INFO" "   ${GREEN}$((i+1))) ${shares[$i]}${NC}"
     done
     
-    log_message "INFO" "${YELLOW}Add these shares to DEFAULT_SHARES in config${NC}"
+    echo
+    read -r -p "Auto-configure this script with these settings? (y/N): " auto_config
+    if [[ "$auto_config" =~ ^[Yy]$ ]]; then
+        update_script_config "$server_ip" "${shares[@]}"
+    else
+        log_message "INFO" "${YELLOW}Add these shares to DEFAULT_SHARES in config${NC}"
+    fi
+}
+
+update_script_config() {
+    local selected_server="$1"
+    shift
+    local discovered_shares=("$@")
+    
+    local script_path="${BASH_SOURCE[0]}"
+    
+    if [ ! -w "$script_path" ]; then
+        log_message "ERROR" "${RED}Cannot write to script file: $script_path${NC}"
+        log_message "INFO" "${YELLOW}Manual configuration needed:${NC}"
+        log_message "INFO" "   DEFAULT_SERVER=\"$selected_server\""
+        printf "   DEFAULT_SHARES=("
+        for share in "${discovered_shares[@]}"; do
+            printf "\"%s\" " "$share"
+        done
+        printf ")\n"
+        return 1
+    fi
+    
+    cp "$script_path" "${script_path}.backup.$(date +%Y%m%d_%H%M%S)"
+    
+    local temp_file=$(mktemp)
+    
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^DEFAULT_SERVER= ]]; then
+            echo "DEFAULT_SERVER=\"$selected_server\""
+        elif [[ "$line" =~ ^DEFAULT_SHARES= ]]; then
+            printf "DEFAULT_SHARES=("
+            for share in "${discovered_shares[@]}"; do
+                printf "\"%s\" " "$share"
+            done
+            printf ")\n"
+        else
+            echo "$line"
+        fi
+    done < "$script_path" > "$temp_file"
+    
+    if mv "$temp_file" "$script_path"; then
+        chmod +x "$script_path"
+        log_message "INFO" "${GREEN}Script configuration updated successfully!${NC}"
+        log_message "INFO" "${CYAN}Server: $selected_server${NC}"
+        log_message "INFO" "${CYAN}Shares: ${discovered_shares[*]}${NC}"
+        return 0
+    else
+        log_message "ERROR" "${RED}Failed to update script configuration${NC}"
+        rm -f "$temp_file"
+        return 1
+    fi
 }
 
 generate_fstab() {
