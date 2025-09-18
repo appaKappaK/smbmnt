@@ -167,7 +167,7 @@ discover_servers() {
     
     local temp_file
     temp_file=$(mktemp)
-    nmap "$NMAP_OPTIONS" "$network" 2>/dev/null | grep -E "Nmap scan report|445/tcp" > "$temp_file"
+    nmap $NMAP_OPTIONS "$network" 2>/dev/null | grep -E "Nmap scan report|445/tcp" > "$temp_file"
     
     local servers=()
     local current_ip=""
