@@ -91,3 +91,15 @@ The script automatically:
 - Adds mounted shares to GTK file manager bookmarks
 - Creates symlinks in home directory (`~/Samba-ShareName`)
 - Removes bookmarks and symlinks when unmounting
+
+## Troubleshoot
+
+#### if you dont want to have to sudo,
+```bash
+# Move the script to your home directory
+sudo mv /usr/local/bin/smbmnt ~/smbmnt.sh
+chmod +x ~/smbmnt.sh
+
+# Create a symlink if you still want to run it from anywhere
+sudo ln -s ~/smbmnt.sh /usr/local/bin/smbmnt
+```
