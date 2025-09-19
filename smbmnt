@@ -11,7 +11,7 @@ DEFAULT_CREDENTIALS="$ACTUAL_USER_HOME/.smbcredentials"
 DEFAULT_SHARES=("ShareName" )
 MOUNT_BASE="/mnt" # or /smb
 CACHE_DIR="$ACTUAL_USER_HOME/.cache/smbmnt"
-NETWORK_SCAN_PREFERENCE=""
+NETWORK_SCAN_PREFERENCE="" # 192...|10...
 SMB_VERSION="3.1.1"
 LOG_FILE="$CACHE_DIR/smbmnt.log"
 NMAP_OPTIONS=(-Pn -n -p 445 --open --min-rate 1000)
@@ -104,7 +104,6 @@ show_usage() {
     echo "  smbmnt -S 192.168.0.0/24       # Scan specific network"
     echo "  smbmnt -Ss 10.8.0.1            # Scan for shares on a specific server"
     echo "  smbmnt -D                      # Use a discovered server"
-    echo "  smbmnt -st                     # Show dashboard"
     echo "  smbmnt --fstab 2               # Generate fstab for shares (1,2,3...)"
 }
 
@@ -725,10 +724,10 @@ done
 if [ ! -f "$CREDENTIALS" ]; then
     log_message "ERROR" "${RED}Credentials file not found: $CREDENTIALS${NC}"
     log_message "INFO" "${YELLOW}Create it with:${NC}"
-    log_message "INFO" "   username=your_username"
-    log_message "INFO" "   password=your_password"
-    log_message "INFO" "   domain=your_domain (optional)"
-    log_message "INFO" "   Ensure permissions with: chmod 600 $CREDENTIALS"
+    log_message "INFO" "username=your_username"
+    log_message "INFO" "password=your_password"
+    log_message "INFO" "domain=your_domain (optional)"
+    log_message "INFO" "Ensure permissions with: chmod 600 $CREDENTIALS"
     exit 1
 fi
 
