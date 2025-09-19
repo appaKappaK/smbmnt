@@ -1,4 +1,4 @@
-# smbmnt 
+# smbmnt
 ## Features
 
 - **Network Discovery**: Automatically scan networks for SMB servers using nmap
