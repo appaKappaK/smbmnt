@@ -24,7 +24,7 @@ ___
 ___
 #### Requirements
 
-- **Required**: `smbclient` `nmap` `cifs-utils`
+- **Required**: `smbclient` `nmap` 
 - **Permissions**: sudo access for editing ServerIP, share-name(s), and mounting/unmounting
 - **Credentials**: SMB credentials file with proper permissions (600)
 
