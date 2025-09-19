@@ -14,7 +14,7 @@ ___
     - Auto adds found shares and server IP so you do not need to manually do it
     - Better fitting parameters
     - Changed NMAP_OPTIONS from string to array
-    - Changed how bookmarking detects pre-existing mounts/folders/shares names
+    - Changed how bookmarking detects pre-existing mounts/folders/share-names
     - Added nofail to mount parameters for --fstab
     - Fixed function so the script can be in system paths 
     - Other small fixes/additions...
