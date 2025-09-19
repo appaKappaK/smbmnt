@@ -46,6 +46,14 @@ log_message() {
     echo -e "$message"
 }
 
+rotate_log_if_needed() {
+    local max_size_mb=10
+    if [ -f "$LOG_FILE" ] && [ $(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null) -gt $((max_size_mb * 1024 * 1024)) ]; then
+        mv "$LOG_FILE" "$LOG_FILE.old"
+        log_message "INFO" "${YELLOW}Rotated log file (> ${max_size_mb}MB)${NC}"
+    fi
+}
+
 validate_server() {
     local server="$1"
     # More comprehensive IP validation
@@ -832,10 +840,10 @@ process_choices() {
     fi
 }
 
+rotate_log_if_needed
 if ! check_dependencies; then
     exit 1
 fi
-
 check_optional_dependencies
 
 SERVER="$DEFAULT_SERVER"
