@@ -9,7 +9,7 @@
 - **Status Dashboard**: View mounted shares and system status
 - **Add entry(s) to fstab**: Create persistent mount configurations
 ___
-### Recent updates
+## Recent updates
 ```
     - Auto adds found shares and server IP so you do not need to manually do it
     - Better fitting parameters
