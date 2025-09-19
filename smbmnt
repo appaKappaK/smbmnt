@@ -307,15 +307,17 @@ update_script_config() {
         fi
     done < "$script_path" > "$temp_file"
     
-    if [ -w "$script_path" ]; then
-        if mv "$temp_file" "$script_path" && chmod +x "$script_path"; then
-            log_message "INFO" "${GREEN}Configuration updated! Server: $selected_server, Shares: ${discovered_shares[*]}${NC}"
-            SHARES=("${discovered_shares[@]}")
-            SERVER="$selected_server"
-            return 0
+    attempt_move() {
+        local use_sudo=${1:-0}
+        if [ "$use_sudo" -eq 1 ]; then
+            sudo mv "$temp_file" "$script_path" && sudo chmod +x "$script_path"
+        else
+            mv "$temp_file" "$script_path" && chmod +x "$script_path"
         fi
-    else
-        if sudo mv "$temp_file" "$script_path" && sudo chmod +x "$script_path"; then
+    }
+    
+    if [ -w "$script_path" ]; then
+        if attempt_move 0; then
             log_message "INFO" "${GREEN}Configuration updated! Server: $selected_server, Shares: ${discovered_shares[*]}${NC}"
             SHARES=("${discovered_shares[@]}")
             SERVER="$selected_server"
@@ -323,7 +325,15 @@ update_script_config() {
         fi
     fi
     
-    log_message "ERROR" "${RED}Failed to update configuration${NC}"
+    if attempt_move 1; then
+        log_message "INFO" "${GREEN}Configuration updated! Server: $selected_server, Shares: ${discovered_shares[*]}${NC}"
+        SHARES=("${discovered_shares[@]}")
+        SERVER="$selected_server"
+        return 0
+    fi
+    
+    log_message "ERROR" "${RED}Failed to update configuration - permission denied${NC}"
+    log_message "INFO" "${YELLOW}You may need to run this script with sudo to update configuration${NC}"
     rm -f "$temp_file"
     return 1
 }
