@@ -27,7 +27,7 @@
 ```
 username=your_username
 password=your_password
-domain=your_domain
+#domain=your_domain
 ```
 
 Set secure permissions: `chmod 600 ~/.smbcredentials`
@@ -37,19 +37,19 @@ Set secure permissions: `chmod 600 ~/.smbcredentials`
 Edit the script variables at the top:
 
 ```bash
-DEFAULT_SERVER="10.8.0.1"                     # Default SMB server
-DEFAULT_SHARES=("Media-Drive1" "shared")      # Available shares
-MOUNT_BASE="/mnt"                             # Mount directory base
+DEFAULT_SERVER="SAMBAIP"                   # Default SMB server
+DEFAULT_SHARES=("SHARES")                  # Available shares
+MOUNT_BASE="/mnt"                          # Mount directory base
 ```
 
 ## Usage
 
 ### Network Discovery
 ```bash
-smbmnt --scan                    # Auto-detect and scan local network
-smbmnt --scan 192.168.1.0/24     # Scan specific network
-smbmnt --scan-shares 10.8.0.1    # List shares on specific server
-smbmnt --discovered              # Use previously discovered servers
+smbmnt -S|--scan                      # Auto-detect and scan local network
+smbmnt -S|--scan 192.168.0.0/24       # Scan specific network
+smbmnt -Ss|--scan-shares 10.8.0.1     # List shares on specific server
+smbmnt -D|--discovered                # Use previously discovered servers
 ```
 
 ### Mount Operations
@@ -58,22 +58,22 @@ smbmnt                   # Interactive mode
 smbmnt 1                 # Mount share #1
 smbmnt 1,3,5             # Mount shares 1, 3, and 5
 smbmnt all               # Mount all shares
-smbmnt --unmount 1       # Unmount share #1
-smbmnt --unmount all     # Unmount all shares
+smbmnt -u|--unmount 1       # Unmount share #1
+smbmnt -u|--unmount all     # Unmount all shares
 ```
 
 ### System Management
 ```bash
-smbmnt --status          # Show mount status dashboard
-smbmnt --list            # List available shares
-smbmnt --fstab 1,2...    # Generate fstab entries for shares 1,2...
+smbmnt -st|--status          # Show mount status dashboard
+smbmnt -ls|--list            # List available shares
+smbmnt --fstab 1,2...        # Generate fstab entries for shares 1,2...
 ```
 
 ### Advanced Options
 ```bash
-smbmnt -s 192.168.1.100  # Use different server
-smbmnt -c /path/to/creds # Use different credentials file
-smbmnt -m /media         # Use different mount base directory
+smbmnt -ip 192.168.0.123        # Use different server
+smbmnt -c /path/to/creds        # Use different credentials file
+smbmnt --mount-base /media      # Use different mount base directory
 ```
 
 ## File Locations
@@ -82,11 +82,12 @@ smbmnt -m /media         # Use different mount base directory
 - **Cache directory**: `~/.cache/smbmnt/`
 - **Discovered servers**: `~/.cache/smbmnt/discovered_servers`
 - **Default credentials**: `~/.smbcredentials`
-- **Mount points**: `/mnt/samba-sharename` (configurable) # personally i like /smb
+- **Mount points**: `/mnt` or `/smb`
 
 ## Desktop Integration
 
 The script automatically:
+- Searches for server IP(s), grabs the share name(s); without manually editing <-NEW
 - Adds mounted shares to GTK file manager bookmarks
 - Creates symlinks in home directory (`~/Samba-ShareName`)
 - Removes bookmarks and symlinks when unmounting
