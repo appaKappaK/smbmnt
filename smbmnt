@@ -288,11 +288,11 @@ update_script_config() {
     local selected_server="$1"
     shift
     local discovered_shares=("$@")
-    
+
     local script_path="${BASH_SOURCE[0]}"
     local temp_file
     temp_file=$(mktemp)
-    
+
     while IFS= read -r line; do
         if [[ "$line" =~ ^DEFAULT_SERVER= ]]; then
             echo "DEFAULT_SERVER=\"$selected_server\""
@@ -306,26 +306,56 @@ update_script_config() {
             echo "$line"
         fi
     done < "$script_path" > "$temp_file"
-    
-    if [ -w "$script_path" ]; then
-        if mv "$temp_file" "$script_path" && chmod +x "$script_path"; then
-            log_message "INFO" "${GREEN}Configuration updated! Server: $selected_server, Shares: ${discovered_shares[*]}${NC}"
-            SHARES=("${discovered_shares[@]}")
-            SERVER="$selected_server"
-            return 0
-        fi
-    else
-        if sudo mv "$temp_file" "$script_path" && sudo chmod +x "$script_path"; then
-            log_message "INFO" "${GREEN}Configuration updated! Server: $selected_server, Shares: ${discovered_shares[*]}${NC}"
-            SHARES=("${discovered_shares[@]}")
-            SERVER="$selected_server"
-            return 0
-        fi
+
+    if ! bash -n "$temp_file" 2>/dev/null; then
+        log_message "ERROR" "${RED}Generated configuration has syntax errors - aborting update${NC}"
+        rm -f "$temp_file"
+        return 1
     fi
-    
-    log_message "ERROR" "${RED}Failed to update configuration${NC}"
-    rm -f "$temp_file"
-    return 1
+
+    attempt_update() {
+        # Method 1: Use install command (most reliable)
+        if sudo install -m 755 "$temp_file" "$script_path" 2>/dev/null; then
+            return 0
+        fi
+
+        if [ -w "$script_path" ]; then
+            if mv "$temp_file" "$script_path" 2>/dev/null && chmod +x "$script_path"; then
+                return 0
+            fi
+        else
+            if sudo mv "$temp_file" "$script_path" 2>/dev/null && sudo chmod +x "$script_path"; then
+                return 0
+            fi
+        fi
+
+        if [ -w "$script_path" ]; then
+            if cat "$temp_file" > "$script_path" 2>/dev/null && chmod +x "$script_path"; then
+                return 0
+            fi
+        else
+            if sudo bash -c "cat '$temp_file' > '$script_path'" 2>/dev/null && sudo chmod +x "$script_path"; then
+                return 0
+            fi
+        fi
+
+        return 1
+    }
+
+    if attempt_update; then
+        log_message "INFO" "${GREEN}Configuration updated! Server: $selected_server, Shares: ${discovered_shares[*]}${NC}"
+        SHARES=("${discovered_shares[@]}")
+        SERVER="$selected_server"
+        rm -f "$temp_file"
+        return 0
+    else
+        log_message "ERROR" "${RED}Failed to update configuration - permission denied${NC}"
+        log_message "INFO" "${YELLOW}The script is located in a system directory (/usr/local/bin/)${NC}"
+        log_message "INFO" "${YELLOW}Try running the script with sudo: sudo $(basename "$script_path")${NC}"
+        log_message "INFO" "${YELLOW}Or move the script to your home directory for easier updates${NC}"
+        rm -f "$temp_file"
+        return 1
+    fi
 }
 
 generate_fstab() {

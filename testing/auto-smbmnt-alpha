@@ -915,6 +915,12 @@ process_choices() {
     fi
 }
 
+rotate_log_if_needed
+if ! check_dependencies; then
+    exit 1
+fi
+check_optional_dependencies
+
 SERVER="$DEFAULT_SERVER"
 CREDENTIALS="$DEFAULT_CREDENTIALS"
 SHARES=("${DEFAULT_SHARES[@]}")
