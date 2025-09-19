@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# shellcheck disable=SC2034
+SCRIPT_NAME="smbmnt"
+SCRIPT_VERSION="2.1"
+SCRIPT_AUTHOR="appaKappaK"
+SCRIPT_DESCRIPTION="Samba mount management utility"
+
 if [ -n "$SUDO_USER" ]; then
     ACTUAL_USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
 else
@@ -31,13 +37,43 @@ touch "$LOG_FILE" 2>/dev/null && chmod 644 "$LOG_FILE" 2>/dev/null
 log_message() {
     local level="$1"
     local message="$2"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [$level] $message" >> "$LOG_FILE"
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local log_entry
+    log_entry="$timestamp [$level] $message"
+    
+    # Log to file
+    echo "$log_entry" >> "$LOG_FILE"
+    
+    # Print to console with colors intact
     echo -e "$message"
+}
+
+rotate_log_if_needed() {
+    local max_size_mb=10
+    if [ -f "$LOG_FILE" ] && [ "$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null)" -gt $((max_size_mb * 1024 * 1024)) ]; then
+        mv "$LOG_FILE" "$LOG_FILE.old"
+        touch "$LOG_FILE"  
+        chmod 644 "$LOG_FILE" 2>/dev/null
+        log_message "INFO" "${YELLOW}Rotated log file (> ${max_size_mb}MB)${NC}"
+    fi
 }
 
 validate_server() {
     local server="$1"
-    if [[ "$server" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || [[ "$server" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+    # More comprehensive IP validation
+    if [[ "$server" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        # Validate each octet is between 0-255
+        IFS='.' read -r -a octets <<< "$server"
+        for octet in "${octets[@]}"; do
+            if ((octet < 0 || octet > 255)); then
+                log_message "ERROR" "${RED}Invalid IP address: $server${NC}"
+                return 1
+            fi
+        done
+        return 0
+    elif [[ "$server" =~ ^[a-zA-Z0-9.-]+$ ]] && [[ "${#server}" -le 253 ]]; then
+        # Validate hostname format and length
         return 0
     else
         log_message "ERROR" "${RED}Invalid server format: $server${NC}"
@@ -48,7 +84,27 @@ validate_server() {
 validate_number() {
     local input="$1"
     local max="$2"
-    [[ "$input" =~ ^[0-9]+$ ]] && [ "$input" -ge 1 ] && [ "$input" -le "$max" ]
+    
+    # Check if input is a number
+    if ! [[ "$input" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    
+    # Check if within valid range
+    if [ "$input" -ge 1 ] && [ "$input" -le "$max" ] 2>/dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+initialize_script() {
+    show_header
+    rotate_log_if_needed
+    log_message "INFO" "${CYAN}Starting $SCRIPT_NAME v$SCRIPT_VERSION${NC}"
+    log_message "DEBUG" "User: $USER, Home: $ACTUAL_USER_HOME"
+    log_message "DEBUG" "Mount base: $MOUNT_BASE, Cache: $CACHE_DIR"
+    return 0
 }
 
 check_dependency() {
@@ -60,20 +116,151 @@ check_dependency() {
     return 0
 }
 
+detect_package_manager() {
+    if command -v dnf &> /dev/null; then
+        echo "dnf"
+    elif command -v apt-get &> /dev/null; then
+        echo "apt"
+    elif command -v pacman &> /dev/null; then
+        echo "pacman"
+    elif command -v yum &> /dev/null; then
+        echo "yum"
+    elif command -v zypper &> /dev/null; then
+        echo "zypper"
+    else
+        echo "unknown"
+    fi
+}
+
+get_package_name() {
+    local dep="$1"
+    case "$dep" in
+        nmap)
+            echo "nmap"
+            ;;
+        smbclient)
+            echo "samba-client"
+            ;;
+        nmblookup)
+            echo "samba-client"
+            ;;
+        cifs-utils)
+            echo "cifs-utils"
+            ;;
+        *)
+            echo "$dep"
+            ;;
+    esac
+}
+
+install_dependency() {
+    local dep="$1"
+    local pkg_manager="$2"
+    local pkg_name
+    pkg_name=$(get_package_name "$dep")
+    
+    log_message "INFO" "${YELLOW}Attempting to install $dep ($pkg_name)...${NC}"
+    
+    case "$pkg_manager" in
+        dnf|yum)
+            sudo "$pkg_manager" install -y "$pkg_name"
+            ;;
+        apt)
+            sudo apt-get update && sudo apt-get install -y "$pkg_name"
+            ;;
+        pacman)
+            sudo pacman -S --noconfirm "$pkg_name"
+            ;;
+        zypper)
+            sudo zypper install -y "$pkg_name"
+            ;;
+        *)
+            log_message "ERROR" "${RED}Unknown package manager: $pkg_manager${NC}"
+            return 1
+            ;;
+    esac
+    
+    if [ $? -eq 0 ]; then
+        log_message "INFO" "${GREEN}Successfully installed $dep${NC}"
+        return 0
+    else
+        log_message "ERROR" "${RED}Failed to install $dep${NC}"
+        return 1
+    fi
+}
+
 check_dependencies() {
     local deps=("nmap" "smbclient")
     local missing=()
+    local pkg_manager
+    pkg_manager=$(detect_package_manager)
 
+    # First pass: check what's missing
     for dep in "${deps[@]}"; do
         if ! check_dependency "$dep"; then
             missing+=("$dep")
         fi
     done
 
-    if [ ${#missing[@]} -gt 0 ]; then
-        log_message "WARNING" "${YELLOW}Missing dependencies: ${missing[*]}${NC}"
+    if [ ${#missing[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    log_message "WARNING" "${YELLOW}Missing dependencies: ${missing[*]}${NC}"
+    
+    # Offer to install missing dependencies
+    if [ "$pkg_manager" != "unknown" ]; then
+        echo
+        read -r -p "Do you want to attempt to install missing dependencies? (y/N): " install_choice
+        if [[ "$install_choice" =~ ^[Yy]$ ]]; then
+            local failed_installs=()
+            
+            for dep in "${missing[@]}"; do
+                if ! install_dependency "$dep" "$pkg_manager"; then
+                    failed_installs+=("$dep")
+                fi
+            done
+            
+            if [ ${#failed_installs[@]} -gt 0 ]; then
+                log_message "ERROR" "${RED}Failed to install: ${failed_installs[*]}${NC}"
+                log_message "INFO" "${YELLOW}Please install these manually and try again.${NC}"
+                return 1
+            else
+                log_message "INFO" "${GREEN}All dependencies installed successfully!${NC}"
+                return 0
+            fi
+        else
+            log_message "INFO" "${YELLOW}Skipping automatic installation. Please install manually:${NC}"
+            for dep in "${missing[@]}"; do
+                local pkg_name
+                pkg_name=$(get_package_name "$dep")
+                log_message "INFO" "  - $pkg_name (provides $dep)"
+            done
+            return 1
+        fi
+    else
+        log_message "ERROR" "${RED}Could not detect package manager. Please install manually:${NC}"
+        for dep in "${missing[@]}"; do
+            log_message "INFO" "  - $dep"
+        done
         return 1
     fi
+}
+
+check_optional_dependencies() {
+    local optional_deps=("nmblookup" "cifs-utils")
+    local missing_optional=()
+    
+    for dep in "${optional_deps[@]}"; do
+        if ! command -v "$dep" &> /dev/null; then
+            missing_optional+=("$dep")
+        fi
+    done
+    
+    if [ ${#missing_optional[@]} -gt 0 ]; then
+        log_message "INFO" "${YELLOW}Optional dependencies missing (features may be limited): ${missing_optional[*]}${NC}"
+    fi
+    
     return 0
 }
 
@@ -144,20 +331,21 @@ discover_servers() {
     echo "Scanning network $network..."
 
     if ! check_dependency "nmap"; then
-        read -r -p "Install nmap? (y/N): " install_choice
-        if [[ "$install_choice" =~ ^[Yy]$ ]]; then
-            echo "Installing nmap..."
-            sudo dnf install -y nmap 2>/dev/null || \
-            sudo apt-get install -y nmap 2>/dev/null || \
-            sudo pacman -S --noconfirm nmap 2>/dev/null || \
-            sudo yum install -y nmap 2>/dev/null
-
-            if ! command -v nmap &> /dev/null; then
-                echo "Error: Could not install nmap. Install manually and retry."
+        local pkg_manager
+        pkg_manager=$(detect_package_manager)
+        if [ "$pkg_manager" != "unknown" ]; then
+            read -r -p "Install nmap? (y/N): " install_choice
+            if [[ "$install_choice" =~ ^[Yy]$ ]]; then
+                if ! install_dependency "nmap" "$pkg_manager"; then
+                    log_message "ERROR" "${RED}Could not install nmap. Install manually and retry.${NC}"
+                    return 1
+                fi
+            else
+                log_message "ERROR" "${RED}nmap required for scanning. Install manually.${NC}"
                 return 1
             fi
         else
-            echo "Error: nmap required for scanning. Install manually."
+            log_message "ERROR" "${RED}nmap required for scanning. Install manually.${NC}"
             return 1
         fi
     fi
@@ -238,11 +426,17 @@ scan_shares() {
     log_message "INFO" "${BLUE}Scanning shares on $server_ip...${NC}"
     
     if ! check_dependency "smbclient"; then
-        read -r -p "Install smbclient? (y/N): " install_choice
-        if [[ "$install_choice" =~ ^[Yy]$ ]]; then
-            sudo dnf install -y samba-client 2>/dev/null || sudo apt-get install -y smbclient 2>/dev/null || sudo pacman -S --noconfirm smbclient 2>/dev/null || sudo yum install -y samba-client 2>/dev/null
-            if ! command -v smbclient &> /dev/null; then
-                log_message "ERROR" "${RED}Could not install smbclient${NC}"
+        local pkg_manager
+        pkg_manager=$(detect_package_manager)
+        if [ "$pkg_manager" != "unknown" ]; then
+            read -r -p "Install smbclient? (y/N): " install_choice
+            if [[ "$install_choice" =~ ^[Yy]$ ]]; then
+                if ! install_dependency "smbclient" "$pkg_manager"; then
+                    log_message "ERROR" "${RED}Could not install smbclient${NC}"
+                    return 1
+                fi
+            else
+                log_message "ERROR" "${RED}smbclient required${NC}"
                 return 1
             fi
         else
@@ -288,12 +482,11 @@ update_script_config() {
     local selected_server="$1"
     shift
     local discovered_shares=("$@")
-    
+
     local script_path="${BASH_SOURCE[0]}"
     local temp_file
     temp_file=$(mktemp)
-    
-    # Read and process the script file
+
     while IFS= read -r line; do
         if [[ "$line" =~ ^DEFAULT_SERVER= ]]; then
             echo "DEFAULT_SERVER=\"$selected_server\""
@@ -307,40 +500,56 @@ update_script_config() {
             echo "$line"
         fi
     done < "$script_path" > "$temp_file"
-    
-    # Function to attempt the move operation
-    attempt_move() {
-        local use_sudo=${1:-0}
-        if [ "$use_sudo" -eq 1 ]; then
-            sudo mv "$temp_file" "$script_path" && sudo chmod +x "$script_path"
-        else
-            mv "$temp_file" "$script_path" && chmod +x "$script_path"
-        fi
-    }
-    
-    # First try without sudo if we have write permissions
-    if [ -w "$script_path" ]; then
-        if attempt_move 0; then
-            log_message "INFO" "${GREEN}Configuration updated! Server: $selected_server, Shares: ${discovered_shares[*]}${NC}"
-            SHARES=("${discovered_shares[@]}")
-            SERVER="$selected_server"
+
+    if ! bash -n "$temp_file" 2>/dev/null; then
+        log_message "ERROR" "${RED}Generated configuration has syntax errors - aborting update${NC}"
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    attempt_update() {
+        # Method 1: Use install command (most reliable)
+        if sudo install -m 755 "$temp_file" "$script_path" 2>/dev/null; then
             return 0
         fi
-    fi
-    
-    # If no write permission or move failed, try with sudo
-    if attempt_move 1; then
+
+        if [ -w "$script_path" ]; then
+            if mv "$temp_file" "$script_path" 2>/dev/null && chmod +x "$script_path"; then
+                return 0
+            fi
+        else
+            if sudo mv "$temp_file" "$script_path" 2>/dev/null && sudo chmod +x "$script_path"; then
+                return 0
+            fi
+        fi
+
+        if [ -w "$script_path" ]; then
+            if cat "$temp_file" > "$script_path" 2>/dev/null && chmod +x "$script_path"; then
+                return 0
+            fi
+        else
+            if sudo bash -c "cat '$temp_file' > '$script_path'" 2>/dev/null && sudo chmod +x "$script_path"; then
+                return 0
+            fi
+        fi
+
+        return 1
+    }
+
+    if attempt_update; then
         log_message "INFO" "${GREEN}Configuration updated! Server: $selected_server, Shares: ${discovered_shares[*]}${NC}"
         SHARES=("${discovered_shares[@]}")
         SERVER="$selected_server"
+        rm -f "$temp_file"
         return 0
+    else
+        log_message "ERROR" "${RED}Failed to update configuration - permission denied${NC}"
+        log_message "INFO" "${YELLOW}The script is located in a system directory (/usr/local/bin/)${NC}"
+        log_message "INFO" "${YELLOW}Try running the script with sudo: sudo $(basename "$script_path")${NC}"
+        log_message "INFO" "${YELLOW}Or move the script to your home directory for easier updates${NC}"
+        rm -f "$temp_file"
+        return 1
     fi
-    
-    # If both attempts failed
-    log_message "ERROR" "${RED}Failed to update configuration - permission denied${NC}"
-    log_message "INFO" "${YELLOW}You may need to run this script with sudo to update configuration${NC}"
-    rm -f "$temp_file"
-    return 1
 }
 
 generate_fstab() {
@@ -394,19 +603,55 @@ generate_fstab() {
 }
 
 show_status() {
+    local term_width
+    term_width=$(tput cols 2>/dev/null || echo "80")
+    
+    if [ "$term_width" -lt 60 ]; then
+        term_width=60
+    elif [ "$term_width" -gt 120 ]; then
+        term_width=120
+    fi
+    
+    local border_char="="
+    local border
+    border=$(printf "%*s" "$term_width" "" | tr ' ' "$border_char")
+    local title="SMB Mount Status"
+    local title_padding
+    title_padding=$(( (term_width - ${#title} - 2) / 2 ))
+    local title_line
+    title_line=$(printf "%*s %s %*s" "$title_padding" "" "$title" "$title_padding" "")
+    
     log_message "INFO" "${PURPLE}"
-    log_message "INFO" " ╔═══════════════════════════════════════════════════════════════════════╗"
-    log_message "INFO" " ║                        SMB Mount Status                           ║"
-    log_message "INFO" " ╚═══════════════════════════════════════════════════════════════════════╝${NC}"
-
+    log_message "INFO" "$border"
+    log_message "INFO" "$title_line"
+    log_message "INFO" "$border${NC}"
+    
     local mounted_count=0
-
+    
     log_message "INFO" "${CYAN}Currently Mounted SMB Shares:${NC}"
     log_message "INFO" ""
-
-    printf "%-20s %-25s %-15s %-10s\n" "Share Name" "Mount Point" "Server" "Size"
-    printf "%-20s %-25s %-15s %-10s\n" "----------" "-----------" "------" "----"
-
+    
+    # Dynamic column widths based on terminal size
+    local col1_width=20
+    local col2_width=25
+    local col3_width=15
+    local col4_width=10
+    
+    # Adjust for smaller terminals
+    if [ "$term_width" -lt 80 ]; then
+        col1_width=15
+        col2_width=20
+        col3_width=12
+        col4_width=8
+    fi
+    
+    printf "%-${col1_width}s %-${col2_width}s %-${col3_width}s %-${col4_width}s\n" "Share Name" "Mount Point" "Server" "Size"
+    printf "%-${col1_width}s %-${col2_width}s %-${col3_width}s %-${col4_width}s\n" \
+           "$(printf "%*s" "$col1_width" "" | tr ' ' '-')" \
+           "$(printf "%*s" "$col2_width" "" | tr ' ' '-')" \
+           "$(printf "%*s" "$col3_width" "" | tr ' ' '-')" \
+           "$(printf "%*s" "$col4_width" "" | tr ' ' '-')"
+    
     for share in "${SHARES[@]}"; do
         local mount_point="$MOUNT_BASE/samba-${share,,}"
         if mountpoint -q "$mount_point" 2>/dev/null || mount | grep -q "$mount_point"; then
@@ -414,22 +659,29 @@ show_status() {
             server_info=$(mount | grep "$mount_point" | sed 's/.*\/\/\([^/]*\)\/.*/\1/')
             local size
             size=$(df -h "$mount_point" 2>/dev/null | tail -n1 | awk '{print $2}')
-            printf "%-20s %-25s %-15s %-10s\n" "$share" "$mount_point" "$server_info" "${size:-N/A}"
+            
+            local display_mount="$mount_point"
+            if [ ${#display_mount} -gt $col2_width ]; then
+                display_mount="...${display_mount: -$((col2_width-3))}"
+            fi
+            
+            printf "%-${col1_width}s %-${col2_width}s %-${col3_width}s %-${col4_width}s\n" \
+                   "$share" "$display_mount" "$server_info" "${size:-N/A}"
             ((mounted_count++))
         fi
     done
-
+    
     if [ $mounted_count -eq 0 ]; then
         log_message "INFO" "${YELLOW}   No SMB shares currently mounted${NC}"
     fi
-
+    
     log_message "INFO" ""
     log_message "INFO" "${BLUE}Summary:${NC}"
     log_message "INFO" "   Mounted shares: $mounted_count/${#SHARES[@]}"
     log_message "INFO" "   Default server: $SERVER"
     log_message "INFO" "   Mount base: $MOUNT_BASE"
     log_message "INFO" "   Log file: $LOG_FILE"
-
+    
     if [ -f "$DISCOVERED_SERVERS_FILE" ] && [ -s "$DISCOVERED_SERVERS_FILE" ]; then
         log_message "INFO" ""
         log_message "INFO" "${PURPLE}Recently Discovered Servers:${NC}"
@@ -441,8 +693,17 @@ show_status() {
             fi
         done < "$DISCOVERED_SERVERS_FILE"
     fi
-
+    
     log_message "INFO" ""
+    log_message "INFO" "${PURPLE}$border${NC}"
+}
+
+show_header() {
+    log_message "INFO" "${PURPLE}"
+    log_message "INFO" "╔═══════════════════════════════════════════════════════════════════════╗"
+    log_message "INFO" "║                     $SCRIPT_NAME v$SCRIPT_VERSION                          ║"
+    log_message "INFO" "║                     $SCRIPT_DESCRIPTION                   ║"
+    log_message "INFO" "╚═══════════════════════════════════════════════════════════════════════╝${NC}"
 }
 
 use_discovered() {
@@ -735,6 +996,20 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+    show_usage
+    exit 0
+fi
+
+if ! initialize_script; then
+    exit 1
+fi
+
+if ! check_dependencies; then
+    exit 1
+fi
+check_optional_dependencies
 
 if [ ! -f "$CREDENTIALS" ]; then
     log_message "ERROR" "${RED}Credentials file not found: $CREDENTIALS${NC}"
