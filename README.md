@@ -30,7 +30,7 @@ ___
 
 #### Installation
 
-1. Copy script to `/usr/local/bin/smbmnt`
+1. Move script to `mv smbmnt-stable /usr/local/bin/smbmnt`
 2. Make executable: `chmod +x /usr/local/bin/smbmnt`
 3. Create credentials file: `~/.smbcredentials`
 
@@ -85,15 +85,3 @@ ___
 - **Discovered servers**: `~/.cache/smbmnt/discovered_servers`
 - **Default credentials**: `~/.smbcredentials`
 - **Mount points**: `/mnt` or `/smb`
-
-___
-#### Bypass sudo for config editing
-
-```
-# Move the script to your home directory
-sudo mv /usr/local/bin/smbmnt ~/smbmnt.sh
-chmod +x ~/smbmnt.sh
-
-# Create a symlink if you still want to run it from anywhere
-sudo ln -s ~/smbmnt.sh /usr/local/bin/smbmnt
-```
