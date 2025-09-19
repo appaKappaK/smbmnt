@@ -1,0 +1,731 @@
+#!/bin/bash
+
+DEFAULT_SERVER="YOURSERVERIP"
+DEFAULT_CREDENTIALS="$HOME/.smbcredentials"
+DEFAULT_SHARES=("shared" "Media-Drive1" "Media-Drive2" "Media-Drive3")
+MOUNT_BASE="/smb"
+CACHE_DIR="$HOME/.cache/smbmnt"
+NETWORK_SCAN_PREFERENCE=""
+SMB_VERSION="3.1.1"
+LOG_FILE="$CACHE_DIR/smbmnt.log"
+NMAP_OPTIONS="-Pn -n -p 445 --open --min-rate 1000"
+DISCOVERED_SERVERS_FILE="$CACHE_DIR/discovered_servers"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+mkdir -p "$CACHE_DIR"
+touch "$LOG_FILE" 2>/dev/null && chmod 644 "$LOG_FILE" 2>/dev/null
+
+log_message() {
+    local level="$1"
+    local message="$2"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$level] $message" >> "$LOG_FILE"
+    echo -e "$message"
+}
+
+validate_server() {
+    local server="$1"
+    if [[ "$server" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || [[ "$server" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+        return 0
+    else
+        log_message "ERROR" "${RED}Invalid server format: $server${NC}"
+        return 1
+    fi
+}
+
+validate_number() {
+    local input="$1"
+    local max="$2"
+    [[ "$input" =~ ^[0-9]+$ ]] && [ "$input" -ge 1 ] && [ "$input" -le "$max" ]
+}
+
+check_dependency() {
+    local dep="$1"
+    if ! command -v "$dep" &> /dev/null; then
+        log_message "ERROR" "${RED}Missing dependency: $dep${NC}"
+        return 1
+    fi
+    return 0
+}
+
+check_dependencies() {
+    local deps=("nmap" "smbclient")
+    local missing=()
+
+    for dep in "${deps[@]}"; do
+        if ! check_dependency "$dep"; then
+            missing+=("$dep")
+        fi
+    done
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        log_message "WARNING" "${YELLOW}Missing dependencies: ${missing[*]}${NC}"
+        return 1
+    fi
+    return 0
+}
+
+show_usage() {
+    echo "Universal Samba Mount Command (smbmnt) - Version 2.0.0"
+    echo "License: MIT"
+    echo ""
+    echo "Usage: smbmnt [OPTIONS] [CHOICE]"
+    echo ""
+    echo "OPTIONS:"
+    echo "  -s, --server IP     Samba server IP/hostname (default: $DEFAULT_SERVER)"
+    echo "  -c, --credentials   Credentials file (default: $DEFAULT_CREDENTIALS)"
+    echo "  -m, --mount-base    Base mount directory (default: $MOUNT_BASE)"
+    echo "  -l, --list          List available shares"
+    echo "  -u, --unmount       Unmount shares instead of mounting"
+    echo "  --scan [NETWORK]    Discover SMB servers on network"
+    echo "  --scan-shares IP    List shares on specific server"
+    echo "  --status            Show mount status dashboard"
+    echo "  --discovered        Use discovered servers instead of default"
+    echo "  --fstab             Generate fstab entries for selected shares"
+    echo "  -h, --help          Show this help"
+    echo ""
+    echo "CHOICE:"
+    echo "  1-N               Mount specific share number"
+    echo "  1,2,3             Mount multiple shares (comma-separated)"
+    echo "  all               Mount all shares"
+    echo "  (none)            Interactive mode"
+    echo ""
+    echo "Examples:"
+    echo "  smbmnt --scan                    # Discover servers on local network"
+    echo "  smbmnt --scan 192.168.1.0/24    # Scan specific network"
+    echo "  smbmnt --scan-shares 10.8.0.1   # List shares on server"
+    echo "  smbmnt --discovered              # Use discovered servers"
+    echo "  smbmnt --status                  # Show dashboard"
+    echo "  smbmnt --fstab 1,2              # Generate fstab for shares 1,2"
+}
+
+detect_network() {
+    if [ -n "$NETWORK_SCAN_PREFERENCE" ]; then
+        echo "$NETWORK_SCAN_PREFERENCE"
+        return 0
+    fi
+
+    local network
+    network=$(ip -4 route show 2>/dev/null | grep -v "default" | grep -E "(192\.168|10\.|172\.)" | awk '{print $1}' | head -n1)
+
+    if [ -z "$network" ]; then
+        local gateway
+        gateway=$(ip route show default 2>/dev/null | awk '{print $3}' | head -n1)
+        if [ -n "$gateway" ]; then
+            network=$(echo "$gateway" | sed 's/\.[0-9]*$/\.0\/24/')
+        fi
+    fi
+
+    if [ -z "$network" ]; then
+        log_message "ERROR" "${RED}Could not detect network. Run --scan <network>.${NC}"
+        return 1
+    fi
+
+    echo "$network"
+}
+
+discover_servers() {
+    local network="$1"
+
+    if [ -z "$network" ]; then
+        if ! network=$(detect_network); then
+            return 1
+        fi
+    fi
+
+    echo "Scanning network $network..."
+
+    if ! check_dependency "nmap"; then
+        read -r -p "Install nmap? (y/N): " install_choice
+        if [[ "$install_choice" =~ ^[Yy]$ ]]; then
+            echo "Installing nmap..."
+            sudo dnf install -y nmap 2>/dev/null || \
+            sudo apt-get install -y nmap 2>/dev/null || \
+            sudo pacman -S --noconfirm nmap 2>/dev/null || \
+            sudo yum install -y nmap 2>/dev/null
+
+            if ! command -v nmap &> /dev/null; then
+                echo "Error: Could not install nmap. Install manually and retry."
+                return 1
+            fi
+        else
+            echo "Error: nmap required for scanning. Install manually."
+            return 1
+        fi
+    fi
+
+    echo "Running scan (30-60 seconds)..."
+
+    local temp_file
+    temp_file=$(mktemp)
+    # shellcheck disable=SC2086
+    nmap $NMAP_OPTIONS "$network" 2>/dev/null | grep -E "Nmap scan report|445/tcp" > "$temp_file"
+
+    local servers=()
+    local current_ip=""
+
+    while IFS= read -r line; do
+        if [[ "$line" =~ "Nmap scan report for" ]]; then
+            current_ip=$(echo "$line" | awk '{print $NF}' | tr -d '()')
+        elif [[ "$line" =~ 445/tcp.*open ]] && [ -n "$current_ip" ]; then
+            servers+=("$current_ip")
+            current_ip=""
+        fi
+    done < "$temp_file"
+
+    rm "$temp_file"
+
+    if [ ${#servers[@]} -eq 0 ]; then
+        echo "No SMB servers found on $network"
+        return 1
+    fi
+
+    echo "Found ${#servers[@]} SMB server(s)"
+
+    if [ -s "$DISCOVERED_SERVERS_FILE" ]; then
+        read -r -p "Refresh discovered servers cache? (y/N): " refresh_choice
+        if [[ "$refresh_choice" =~ ^[Yy]$ ]]; then
+            : > "$DISCOVERED_SERVERS_FILE"
+            echo "Cache cleared. Starting fresh."
+        else
+            echo "Appending new servers to existing cache..."
+        fi
+    fi
+
+    for i in "${!servers[@]}"; do
+        local ip="${servers[$i]}"
+        local hostname=""
+
+        echo "Testing server $ip..."
+
+        hostname=$(nslookup "$ip" 2>/dev/null | grep "name =" | awk '{print $4}' | sed 's/\.$//' | tr '[:upper:]' '[:lower:]')
+        if [ -z "$hostname" ] && command -v nmblookup &> /dev/null; then
+            hostname=$(nmblookup -A "$ip" 2>/dev/null | grep "<00>" | head -n1 | awk '{print $1}' | tr '[:upper:]' '[:lower:]')
+        fi
+
+        if [ -n "$hostname" ]; then
+            echo "$((i+1))) $ip ($hostname)"
+            echo "$ip:$hostname" >> "$DISCOVERED_SERVERS_FILE"
+        else
+            echo "$((i+1))) $ip"
+            echo "$ip:" >> "$DISCOVERED_SERVERS_FILE"
+        fi
+    done
+
+    sort -u -o "$DISCOVERED_SERVERS_FILE" "$DISCOVERED_SERVERS_FILE"
+
+    echo "Discovered servers saved to cache"
+    echo "Use 'smbmnt --discovered' to mount from discovered servers"
+}
+
+scan_shares() {
+    local server_ip="$1"
+
+    if [ -z "$server_ip" ]; then
+        log_message "ERROR" "${RED}Server IP required${NC}"
+        return 1
+    fi
+
+    validate_server "$server_ip" || return 1
+
+    log_message "INFO" "${BLUE}Scanning shares on $server_ip...${NC}"
+
+    if ! check_dependency "smbclient"; then
+        read -r -p "Install smbclient? (y/N): " install_choice
+        if [[ "$install_choice" =~ ^[Yy]$ ]]; then
+            log_message "INFO" "${YELLOW}Installing smbclient...${NC}"
+            sudo dnf install -y samba-client 2>/dev/null || \
+            sudo apt-get install -y smbclient 2>/dev/null || \
+            sudo pacman -S --noconfirm smbclient 2>/dev/null || \
+            sudo yum install -y samba-client 2>/dev/null
+
+            if ! command -v smbclient &> /dev/null; then
+                log_message "ERROR" "${RED}Could not install smbclient. Install manually and retry.${NC}"
+                return 1
+            fi
+        else
+            log_message "ERROR" "${RED}smbclient required for scanning. Install manually.${NC}"
+            return 1
+        fi
+    fi
+
+    log_message "INFO" "${YELLOW}Attempting anonymous connection...${NC}"
+
+    local shares_output
+    if ! shares_output=$(smbclient -L "$server_ip" -N 2>/dev/null); then
+        if [ -f "$CREDENTIALS" ]; then
+            log_message "INFO" "${YELLOW}Trying with credentials...${NC}"
+            if ! shares_output=$(smbclient -L "$server_ip" -A "$CREDENTIALS" 2>/dev/null); then
+                log_message "ERROR" "${RED}Could not connect to $server_ip${NC}"
+                return 1
+            fi
+        else
+            log_message "ERROR" "${RED}Could not connect to $server_ip and no credentials file found${NC}"
+            return 1
+        fi
+    fi
+
+    local shares
+    mapfile -t shares < <(echo "$shares_output" | grep "Disk" | awk '{print $1}' | grep -v "^$" | grep -v "IPC\$" | grep -v "print\$")
+
+    if [ ${#shares[@]} -eq 0 ]; then
+        log_message "ERROR" "${RED}No shares found on $server_ip${NC}"
+        return 1
+    fi
+
+    log_message "INFO" "${GREEN}Found ${#shares[@]} share(s) on $server_ip:${NC}"
+
+    for i in "${!shares[@]}"; do
+        log_message "INFO" "   ${GREEN}$((i+1))) ${shares[$i]}${NC}"
+    done
+
+    log_message "INFO" "${YELLOW}Add these shares to DEFAULT_SHARES in config${NC}"
+}
+
+generate_fstab() {
+    local choice="$1"
+
+    log_message "INFO" "${BLUE}Generating fstab entries...${NC}"
+
+    local fstab_entries=()
+    if [[ "$choice" == "all" ]]; then
+        for share in "${SHARES[@]}"; do
+            local mount_point="$MOUNT_BASE/samba-${share,,}"
+            fstab_entries+=("//$SERVER/$share $mount_point cifs credentials=$CREDENTIALS,uid=$(id -u),gid=$(id -g),file_mode=0664,dir_mode=0775,vers=$SMB_VERSION 0 0")
+        done
+    elif [[ "$choice" =~ ^[0-9,]+$ ]]; then
+        IFS=',' read -ra CHOICES <<< "$choice"
+        for ch in "${CHOICES[@]}"; do
+            ch=$(echo "$ch" | tr -d ' ')
+            index=$((ch-1))
+            if [ $index -ge 0 ] && [ $index -lt ${#SHARES[@]} ]; then
+                local share="${SHARES[$index]}"
+                local mount_point="$MOUNT_BASE/samba-${share,,}"
+                fstab_entries+=("//$SERVER/$share $mount_point cifs credentials=$CREDENTIALS,uid=$(id -u),gid=$(id -g),file_mode=0664,dir_mode=0775,vers=$SMB_VERSION 0 0")
+            else
+                log_message "ERROR" "${RED}Invalid choice: $ch${NC}"
+            fi
+        done
+    else
+        log_message "ERROR" "${RED}Invalid choice: $choice${NC}"
+        return 1
+    fi
+
+    if [ ${#fstab_entries[@]} -eq 0 ]; then
+        log_message "ERROR" "${RED}No valid fstab entries generated${NC}"
+        return 1
+    fi
+
+    log_message "INFO" "${YELLOW}Adding to /etc/fstab (requires sudo)...${NC}"
+    for entry in "${fstab_entries[@]}"; do
+        if ! grep -Fxq "$entry" /etc/fstab 2>/dev/null; then
+            if echo "$entry" | sudo tee -a /etc/fstab >/dev/null; then
+                log_message "INFO" "${GREEN}Added to fstab: $entry${NC}"
+            else
+                log_message "ERROR" "${RED}Failed to add to fstab: $entry${NC}"
+            fi
+        else
+            log_message "INFO" "${YELLOW}Already in fstab: $entry${NC}"
+        fi
+    done
+
+    log_message "INFO" "${YELLOW}Run 'sudo mount -a' to apply fstab changes${NC}"
+}
+
+show_status() {
+    log_message "INFO" "${PURPLE}"
+    log_message "INFO" " ╔═══════════════════════════════════════════════════════════════════════╗"
+    log_message "INFO" " ║                        SMB Mount Status                           ║"
+    log_message "INFO" " ╚═══════════════════════════════════════════════════════════════════════╝${NC}"
+
+    local mounted_count=0
+
+    log_message "INFO" "${CYAN}Currently Mounted SMB Shares:${NC}"
+    log_message "INFO" ""
+
+    printf "%-20s %-25s %-15s %-10s\n" "Share Name" "Mount Point" "Server" "Size"
+    printf "%-20s %-25s %-15s %-10s\n" "----------" "-----------" "------" "----"
+
+    for share in "${SHARES[@]}"; do
+        local mount_point="$MOUNT_BASE/samba-${share,,}"
+        if mountpoint -q "$mount_point" 2>/dev/null || mount | grep -q "$mount_point"; then
+            local server_info
+            server_info=$(mount | grep "$mount_point" | sed 's/.*\/\/\([^/]*\)\/.*/\1/')
+            local size
+            size=$(df -h "$mount_point" 2>/dev/null | tail -n1 | awk '{print $2}')
+            printf "%-20s %-25s %-15s %-10s\n" "$share" "$mount_point" "$server_info" "${size:-N/A}"
+            ((mounted_count++))
+        fi
+    done
+
+    if [ $mounted_count -eq 0 ]; then
+        log_message "INFO" "${YELLOW}   No SMB shares currently mounted${NC}"
+    fi
+
+    log_message "INFO" ""
+    log_message "INFO" "${BLUE}Summary:${NC}"
+    log_message "INFO" "   Mounted shares: $mounted_count/${#SHARES[@]}"
+    log_message "INFO" "   Default server: $SERVER"
+    log_message "INFO" "   Mount base: $MOUNT_BASE"
+    log_message "INFO" "   Log file: $LOG_FILE"
+
+    if [ -f "$DISCOVERED_SERVERS_FILE" ] && [ -s "$DISCOVERED_SERVERS_FILE" ]; then
+        log_message "INFO" ""
+        log_message "INFO" "${PURPLE}Recently Discovered Servers:${NC}"
+        while IFS=':' read -r ip hostname; do
+            if [ -n "$hostname" ]; then
+                log_message "INFO" "   • $ip ($hostname)"
+            else
+                log_message "INFO" "   • $ip"
+            fi
+        done < "$DISCOVERED_SERVERS_FILE"
+    fi
+
+    log_message "INFO" ""
+}
+
+use_discovered() {
+    if [ ! -f "$DISCOVERED_SERVERS_FILE" ] || [ ! -s "$DISCOVERED_SERVERS_FILE" ]; then
+        log_message "ERROR" "${RED}No discovered servers found${NC}"
+        log_message "INFO" "${YELLOW}Run 'smbmnt --scan' first${NC}"
+        return 1
+    fi
+
+    log_message "INFO" "${BLUE}Discovered SMB Servers:${NC}"
+    log_message "INFO" ""
+
+    local servers=()
+    local i=1
+
+    while IFS=':' read -r ip hostname; do
+        if [ -n "$hostname" ]; then
+            log_message "INFO" "   ${GREEN}$i) $ip ($hostname)${NC}"
+        else
+            log_message "INFO" "   ${GREEN}$i) $ip${NC}"
+        fi
+        servers+=("$ip")
+        ((i++))
+    done < "$DISCOVERED_SERVERS_FILE"
+
+    log_message "INFO" ""
+
+    if [ ${#servers[@]} -eq 1 ]; then
+        SERVER="${servers[0]}"
+        log_message "INFO" "${GREEN}Using server: $SERVER${NC}"
+        log_message "INFO" ""
+
+        read -r -p "Scan for available shares on this server? (y/N): " scan_choice
+        if [[ "$scan_choice" =~ ^[Yy]$ ]]; then
+            scan_shares "$SERVER"
+        fi
+    else
+        while true; do
+            read -r -p "Select server (1-${#servers[@]}): " choice
+            if validate_number "$choice" "${#servers[@]}"; then
+                local index=$((choice-1))
+                SERVER="${servers[$index]}"
+                log_message "INFO" "${GREEN}Using server: $SERVER${NC}"
+                log_message "INFO" ""
+
+                read -r -p "Scan for available shares on this server? (y/N): " scan_choice
+                if [[ "$scan_choice" =~ ^[Yy]$ ]]; then
+                    scan_shares "$SERVER"
+                fi
+                break
+            else
+                log_message "ERROR" "${RED}Invalid choice. Please enter a number between 1 and ${#servers[@]}${NC}"
+            fi
+        done
+    fi
+}
+
+add_to_side_panel() {
+    local mount_point="$1"
+    local share_name="$2"
+
+    log_message "INFO" "${PURPLE}Adding to side panel...${NC}"
+
+    GTK_BOOKMARKS="$HOME/.config/gtk-3.0/bookmarks"
+    mkdir -p "$(dirname "$GTK_BOOKMARKS")"
+
+    if [ -f "$GTK_BOOKMARKS" ]; then
+        sed -i "\|$mount_point|d" "$GTK_BOOKMARKS"
+    fi
+
+    echo "file://$mount_point Samba: $share_name" >> "$GTK_BOOKMARKS"
+
+    LINK_PATH="$HOME/Samba-$share_name"
+    if [ ! -L "$LINK_PATH" ]; then
+        ln -s "$mount_point" "$LINK_PATH"
+        log_message "INFO" "${GREEN}Created symlink: $LINK_PATH${NC}"
+    fi
+}
+
+remove_from_side_panel() {
+    local mount_point="$1"
+    local share_name="$2"
+
+    log_message "INFO" "${YELLOW}Removing from side panel...${NC}"
+
+    GTK_BOOKMARKS="$HOME/.config/gtk-3.0/bookmarks"
+    if [ -f "$GTK_BOOKMARKS" ]; then
+        sed -i "\|$mount_point|d" "$GTK_BOOKMARKS"
+    fi
+
+    LINK_PATH="$HOME/Samba-$share_name"
+    if [ -L "$LINK_PATH" ]; then
+        rm "$LINK_PATH"
+        log_message "INFO" "${GREEN}Removed symlink: $LINK_PATH${NC}"
+    fi
+}
+
+mount_share() {
+    local share_name="$1"
+    local mount_point="$MOUNT_BASE/samba-${share_name,,}"
+    local share_path="//$SERVER/$share_name"
+
+    if [[ ! "$share_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        log_message "ERROR" "${RED}Invalid share name: $share_name${NC}"
+        return 1
+    fi
+
+    if mountpoint -q "$mount_point" 2>/dev/null || mount | grep -q "$mount_point"; then
+        log_message "INFO" "${GREEN}$share_name already mounted at $mount_point${NC}"
+        add_to_side_panel "$mount_point" "$share_name"
+        return 0
+    fi
+
+    if [ ! -d "$mount_point" ]; then
+        if ! sudo mkdir -p "$mount_point" || ! sudo chown "$USER:$USER" "$mount_point"; then
+            log_message "ERROR" "${RED}Failed to create or set ownership for mount directory: $mount_point${NC}"
+            return 1
+        fi
+    fi
+
+    log_message "INFO" "${BLUE}Mounting $share_name...${NC}"
+
+    if sudo mount -t cifs "$share_path" "$mount_point" -o "credentials=$CREDENTIALS,uid=$(id -u),gid=$(id -g),file_mode=0664,dir_mode=0775,vers=$SMB_VERSION" 2>>"$LOG_FILE"; then
+        log_message "INFO" "${GREEN}$share_name mounted successfully at $mount_point${NC}"
+        add_to_side_panel "$mount_point" "$share_name"
+        return 0
+    else
+        log_message "ERROR" "${RED}Mount failed for $share_name. Check $LOG_FILE or dmesg for details.${NC}"
+        return 1
+    fi
+}
+
+unmount_share() {
+    local share_name="$1"
+    local mount_point="$MOUNT_BASE/samba-${share_name,,}"
+
+    if [[ ! "$share_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        log_message "ERROR" "${RED}Invalid share name: $share_name${NC}"
+        return 1
+    fi
+
+    if mountpoint -q "$mount_point" 2>/dev/null || mount | grep -q "$mount_point"; then
+        log_message "INFO" "${BLUE}Unmounting $share_name...${NC}"
+        if sudo umount "$mount_point" 2>>"$LOG_FILE"; then
+            log_message "INFO" "${GREEN}$share_name unmounted successfully${NC}"
+            remove_from_side_panel "$mount_point" "$share_name"
+            sudo rmdir "$mount_point" 2>/dev/null
+        else
+            log_message "ERROR" "${RED}Unmount failed for $share_name. Check $LOG_FILE or dmesg for details.${NC}"
+            return 1
+        fi
+    else
+        log_message "INFO" "${YELLOW}$share_name is not mounted${NC}"
+    fi
+}
+
+list_shares() {
+    log_message "INFO" "${CYAN}Available shares on $SERVER:${NC}"
+    log_message "INFO" "=============================="
+    for i in "${!SHARES[@]}"; do
+        mount_point="$MOUNT_BASE/samba-${SHARES[$i],,}"
+        if mountpoint -q "$mount_point" 2>/dev/null || mount | grep -q "$mount_point"; then
+            log_message "INFO" "$((i+1))) ${SHARES[$i]} ${GREEN}[MOUNTED]${NC}"
+        else
+            log_message "INFO" "$((i+1))) ${SHARES[$i]}"
+        fi
+    done
+}
+
+process_choices() {
+    local choice="$1"
+    local action="$2"
+
+    if [[ "$choice" == "all" ]]; then
+        log_message "INFO" "${BLUE}${action^}ing all shares...${NC}"
+        for share in "${SHARES[@]}"; do
+            if [ "$action" == "mount" ]; then
+                mount_share "$share"
+            else
+                unmount_share "$share"
+            fi
+        done
+    elif [[ "$choice" =~ ^[0-9,]+$ ]]; then
+        IFS=',' read -ra CHOICES <<< "$choice"
+        for ch in "${CHOICES[@]}"; do
+            ch=$(echo "$ch" | tr -d ' ')
+            index=$((ch-1))
+            if [ $index -ge 0 ] && [ $index -lt ${#SHARES[@]} ]; then
+                if [ "$action" == "mount" ]; then
+                    mount_share "${SHARES[$index]}"
+                else
+                    unmount_share "${SHARES[$index]}"
+                fi
+            else
+                log_message "ERROR" "${RED}Invalid choice: $ch${NC}"
+            fi
+        done
+    else
+        log_message "ERROR" "${RED}Invalid choice: $choice${NC}"
+        return 1
+    fi
+}
+
+SERVER="$DEFAULT_SERVER"
+CREDENTIALS="$DEFAULT_CREDENTIALS"
+SHARES=("${DEFAULT_SHARES[@]}")
+UNMOUNT_MODE=false
+INTERACTIVE_MODE=true
+FSTAB_MODE=false
+CHOICE=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -s|--server)
+            validate_server "$2" || exit 1
+            SERVER="$2"
+            shift 2
+            ;;
+        -c|--credentials)
+            CREDENTIALS="$2"
+            shift 2
+            ;;
+        -m|--mount-base)
+            MOUNT_BASE="$2"
+            shift 2
+            ;;
+        -l|--list)
+            list_shares
+            exit 0
+            ;;
+        -u|--unmount)
+            UNMOUNT_MODE=true
+            shift
+            ;;
+        --scan)
+            NETWORK_ARG=""
+            if [[ $# -gt 1 ]] && [[ ! "$2" =~ ^- ]]; then
+                NETWORK_ARG="$2"
+                shift
+            fi
+            discover_servers "$NETWORK_ARG"
+            exit $?
+            ;;
+        --scan-shares)
+            if [[ $# -gt 1 ]] && [[ ! "$2" =~ ^- ]]; then
+                scan_shares "$2"
+                exit $?
+            else
+                log_message "ERROR" "${RED}Server IP required for --scan-shares${NC}"
+                exit 1
+            fi
+            ;;
+        --status)
+            show_status
+            exit 0
+            ;;
+        --discovered)
+            use_discovered
+            shift
+            ;;
+        --fstab)
+            FSTAB_MODE=true
+            shift
+            ;;
+        -h|--help)
+            show_usage
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            log_message "ERROR" "${RED}Unknown option: $1${NC}"
+            show_usage
+            exit 1
+            ;;
+        *)
+            CHOICE="$1"
+            INTERACTIVE_MODE=false
+            shift
+            ;;
+    esac
+done
+
+if [ ! -f "$CREDENTIALS" ]; then
+    log_message "ERROR" "${RED}Credentials file not found: $CREDENTIALS${NC}"
+    log_message "INFO" "${YELLOW}Create it with:${NC}"
+    log_message "INFO" "   username=your_username"
+    log_message "INFO" "   password=your_password"
+    log_message "INFO" "   domain=your_domain (optional)"
+    log_message "INFO" "   Ensure permissions with: chmod 600 $CREDENTIALS"
+    exit 1
+fi
+
+if [ -f "$CREDENTIALS" ] && [ "$(stat -c %a "$CREDENTIALS" 2>/dev/null || stat -f %A "$CREDENTIALS" 2>/dev/null)" != "600" ]; then
+    log_message "ERROR" "${RED}Credentials file permissions insecure: $CREDENTIALS${NC}"
+    log_message "INFO" "${YELLOW}Run: chmod 600 $CREDENTIALS${NC}"
+    exit 1
+fi
+
+if [ "$INTERACTIVE_MODE" = false ]; then
+    if [ "$FSTAB_MODE" = true ]; then
+        generate_fstab "$CHOICE"
+        exit $?
+    elif [ "$UNMOUNT_MODE" = true ]; then
+        process_choices "$CHOICE" "unmount"
+        exit $?
+    else
+        process_choices "$CHOICE" "mount"
+        exit $?
+    fi
+fi
+
+log_message "INFO" "${PURPLE}"
+log_message "INFO" "╔═══════════════════════════════════════════════════════════════════════╗"
+log_message "INFO" "║                      SMB Mount Manager                                ║"
+log_message "INFO" "╚═══════════════════════════════════════════════════════════════════════╝${NC}"
+log_message "INFO" "${CYAN}Server: $SERVER${NC}"
+log_message "INFO" "${CYAN}Credentials: $CREDENTIALS${NC}"
+log_message "INFO" ""
+
+if [ "$FSTAB_MODE" = true ]; then
+    log_message "INFO" "${YELLOW}FSTAB MODE${NC}"
+    list_shares
+    log_message "INFO" ""
+    read -r -p "Enter choice for fstab (1-${#SHARES[@]}, all, or comma-separated): " choice
+    generate_fstab "$choice"
+elif [ "$UNMOUNT_MODE" = true ]; then
+    log_message "INFO" "${YELLOW}🔌 UNMOUNT MODE${NC}"
+    list_shares
+    log_message "INFO" ""
+    read -r -p "Enter choice to unmount (1-${#SHARES[@]}, all, or comma-separated): " choice
+    process_choices "$choice" "unmount" "$DRY_RUN"
+else
+    list_shares
+    log_message "INFO" "all) Mount all shares"
+    log_message "INFO" ""
+    read -r -p "Enter choice (1-${#SHARES[@]}, all, or comma-separated): " choice
+    process_choices "$choice" "mount" "$DRY_RUN"
+fi
