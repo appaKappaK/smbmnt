@@ -18,6 +18,7 @@ ___
     - Added nofail to mount parameters for --fstab, in the event the share is unavailable at boot
     - Fixed the script so it can be in system paths and be able to automatically update the share(s)/IP
     - Other small fixes/additions...
+    - Log rotation
 ```
 ___
 ## Requirements
