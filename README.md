@@ -37,9 +37,9 @@ Set secure permissions: `chmod 600 ~/.smbcredentials`
 Edit the script variables at the top:
 
 ```bash
-DEFAULT_SERVER="SAMBAIP"                   # Default SMB server
-DEFAULT_SHARES=("SHARES")                  # Available shares
-MOUNT_BASE="/mnt"                          # Mount directory base
+DEFAULT_SERVER="SAMBAIP"               # Default SMB server
+DEFAULT_SHARES=("SHARES")              # Available shares
+MOUNT_BASE="/mnt"                      # Mount directory base
 ```
 
 ## Usage
@@ -54,12 +54,12 @@ smbmnt -D|--discovered                # Use previously discovered servers
 
 ### Mount Operations
 ```bash
-smbmnt                   # Interactive mode
-smbmnt 1                 # Mount share #1
-smbmnt 1,3,5             # Mount shares 1, 3, and 5
-smbmnt all               # Mount all shares
-smbmnt -u|--unmount 1       # Unmount share #1
-smbmnt -u|--unmount all     # Unmount all shares
+smbmnt                    # Interactive mode
+smbmnt 1                  # Mount share #1
+smbmnt 1,3,5              # Mount shares 1, 3, and 5
+smbmnt all                # Mount all shares
+smbmnt -u|--unmount 1     # Unmount share #1
+smbmnt -u|--unmount all   # Unmount all shares
 ```
 
 ### System Management
@@ -87,7 +87,7 @@ smbmnt --mount-base /media      # Use different mount base directory
 ## Desktop Integration
 
 The script automatically:
-- Searches for server IP(s), grabs the share name(s); without manually editing <-NEW
+- Searches for server IP(s), grabs the share name(s); without manually editing 
 - Adds mounted shares to GTK file manager bookmarks
 - Creates symlinks in home directory (`~/Samba-ShareName`)
 - Removes bookmarks and symlinks when unmounting
