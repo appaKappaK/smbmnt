@@ -104,7 +104,7 @@ The script automatically:
 
 ## Troubleshoot
 
-#### if you dont want to have to sudo,
+#### if you dont want to deal with system path problems,
 ```bash
 # Move the script to your home directory
 sudo mv /usr/local/bin/smbmnt ~/smbmnt.sh
