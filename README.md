@@ -1,5 +1,6 @@
 # smbmnt
-## Features
+___
+#### Features
 
 - **Network Discovery**: Automatically scan networks for SMB servers using nmap
 - **Share Discovery**: List available shares on discovered servers
@@ -9,7 +10,7 @@
 - **Status Dashboard**: View mounted shares and system status
 - **Add entry(s) to fstab**: Create persistent mount configurations
 ___
-## Recent updates
+### Recent updates
 ```
     - Auto adds found shares and server IP so you do not need to manually do it
     - Better fitting parameters
@@ -21,22 +22,21 @@ ___
     - Log rotation
     - Dynamic sizing
     - Better dependency checks
-
 ```
 ___
-## Requirements
+#### Requirements
 
 - **Required**: `smbclient` `nmap` `cifs-utils`
 - **Permissions**: sudo access for editing ServerIP, share-name(s), and mounting/unmounting
 - **Credentials**: SMB credentials file with proper permissions (600)
 
-## Installation
+#### Installation
 
 1. Copy script to `/usr/local/bin/smbmnt`
 2. Make executable: `chmod +x /usr/local/bin/smbmnt`
 3. Create credentials file: `~/.smbcredentials`
 
-### Credentials File Format
+#### Credentials File Format
 
 ```
 username=your_username
@@ -46,28 +46,28 @@ password=your_password
 
 Set secure permissions: `chmod 600 ~/.smbcredentials`
 
-## Configuration
+#### Configuration
 
 Edit the script variables at the top:
 
-```bash
+```
 DEFAULT_SERVER="SAMBAIP"               # Default SMB server
 DEFAULT_SHARES=("SHARES")              # Available shares
 MOUNT_BASE="/mnt"                      # Mount directory base
 ```
+___
+### Usage
 
-## Usage
-
-### Network Discovery
-```bash
+#### Network Discovery
+```
 smbmnt -S|--scan                      # Auto-detect and scan local network
 smbmnt -S|--scan 192.168.0.0/24       # Scan specific network
 smbmnt -Ss|--scan-shares 10.8.0.1     # List shares on specific server
 smbmnt -D|--discovered                # Use previously discovered servers
 ```
 
-### Mount Operations
-```bash
+#### Mount Operations
+```
 smbmnt                    # Interactive mode
 smbmnt 1                  # Mount share #1
 smbmnt 1,3,5              # Mount shares 1, 3, and 5
@@ -76,21 +76,21 @@ smbmnt -u|--unmount 1     # Unmount share #1
 smbmnt -u|--unmount all   # Unmount all shares
 ```
 
-### System Management
-```bash
+#### System Management
+```
 smbmnt -st|--status          # Show mount status dashboard
 smbmnt -ls|--list            # List available shares
 smbmnt --fstab 1,2...        # Generate fstab entries for shares 1,2...
 ```
 
-### Advanced Options
-```bash
+#### Advanced Options
+```
 smbmnt -ip 192.168.0.123        # Use different server
 smbmnt -c /path/to/creds        # Use different credentials file
 smbmnt --mount-base /media      # Use different mount base directory
 ```
-
-## File Locations
+___
+### File Locations
 
 - **Log file**: `~/.cache/smbmnt/smbmnt.log`
 - **Cache directory**: `~/.cache/smbmnt/`
@@ -98,15 +98,8 @@ smbmnt --mount-base /media      # Use different mount base directory
 - **Default credentials**: `~/.smbcredentials`
 - **Mount points**: `/mnt` or `/smb`
 
-## Desktop Integration
-
-The script automatically:
-- Searches for server IP(s), grabs the share name(s); without manually editing 
-- Adds mounted shares to GTK file manager bookmarks
-- Creates symlinks in home directory (`~/Samba-ShareName`)
-- Removes bookmarks and symlinks when unmounting
-
-## Other Methods
+___
+#### Bypass sudo for config editing
 
 ```
 # Move the script to your home directory
