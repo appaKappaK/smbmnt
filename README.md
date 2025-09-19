@@ -113,9 +113,3 @@ chmod +x ~/smbmnt.sh
 # Create a symlink if you still want to run it from anywhere
 sudo ln -s ~/smbmnt.sh /usr/local/bin/smbmnt
 ```
-or
-```bash
-# Add your home directory to PATH
-echo 'export PATH="$HOME:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-```
