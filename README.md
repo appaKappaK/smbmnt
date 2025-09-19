@@ -8,12 +8,22 @@
 - **Desktop Integration**: Automatic GTK bookmarks and home directory symlinks
 - **Status Dashboard**: View mounted shares and system status
 - **Add entry(s) to fstab**: Create persistent mount configurations
-
-
+___
+### Recent updates
+```bash
+    - Auto adds found shares and server IP so you do not need to manually do it
+    - Better fitting parameters
+    - Changed NMAP_OPTIONS from string to array
+    - Changed how bookmarking detects existing folders/shares names
+    - Added nofail to mount parameters for --fstab, in the event the share is unavailable at boot
+    - Fixed the script so it can be in system paths and be able to automatically update the share(s)/ips
+    - Other small fixes/additions...
+```
+___
 ## Requirements
 
 - **Required**: `smbclient` `nmap` `cifs-utils`
-- **Permissions**: sudo access for mounting/unmounting
+- **Permissions**: sudo access for editing ServerIP, share-name(s), and mounting/unmounting
 - **Credentials**: SMB credentials file with proper permissions (600)
 
 ## Installation
