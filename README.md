@@ -1,7 +1,5 @@
 # smbmnt
 
-#### Features
-
 - **Network Discovery**: Automatically scan networks for SMB servers using nmap
 - **Share Discovery**: List available shares on discovered servers
 - **Interactive & Command-line Modes**: Full menu-driven interface or direct command execution
@@ -44,17 +42,7 @@ password=your_password
 #domain=your_domain
 ```
 
-Set secure permissions: `chmod 600 ~/.smbcredentials`
-
-#### Configuration
-
-Edit the script variables at the top:
-
-```
-DEFAULT_SERVER="SAMBAIP"               # Default SMB server
-DEFAULT_SHARES=("SHARES")              # Available shares
-MOUNT_BASE="/mnt"                      # Mount directory base
-```
+**Set secure permissions:** `chmod 600 ~/.smbcredentials`
 ___
 ### Usage
 
