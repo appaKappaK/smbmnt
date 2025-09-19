@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCRIPT_NAME="smbmnt"
-SCRIPT_VERSION="2.0"
+SCRIPT_VERSION="2.1"
 SCRIPT_AUTHOR="appaKappaK"
 SCRIPT_DESCRIPTION="Samba mount management utility"
 
