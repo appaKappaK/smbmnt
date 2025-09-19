@@ -19,6 +19,9 @@ ___
     - Fixed function so the script can be in system paths 
     - Other small fixes/additions...
     - Log rotation
+    - Dynamic sizing
+    - Better dependency checks
+
 ```
 ___
 ## Requirements
@@ -103,10 +106,9 @@ The script automatically:
 - Creates symlinks in home directory (`~/Samba-ShareName`)
 - Removes bookmarks and symlinks when unmounting
 
-## Troubleshoot
+## Other Methods
 
-#### if you dont want to deal with system path problems,
-```bash
+```
 # Move the script to your home directory
 sudo mv /usr/local/bin/smbmnt ~/smbmnt.sh
 chmod +x ~/smbmnt.sh
