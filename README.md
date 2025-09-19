@@ -16,7 +16,7 @@ ___
     - Changed NMAP_OPTIONS from string to array
     - Changed how bookmarking detects existing folders/shares names
     - Added nofail to mount parameters for --fstab, in the event the share is unavailable at boot
-    - Fixed the script so it can be in system paths and be able to automatically update the share(s)/ips
+    - Fixed the script so it can be in system paths and be able to automatically update the share(s)/IP
     - Other small fixes/additions...
 ```
 ___
