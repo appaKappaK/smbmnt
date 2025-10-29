@@ -19,7 +19,6 @@ ___
     - Other small fixes/additions...
     - Log rotation
     - Dynamic sizing
-    - Better dependency checks
 ```
 ___
 #### Requirements
