@@ -135,7 +135,7 @@ show_usage() {
     echo "  -D, --discovered          Use discovered servers instead of default"
     echo "  --config                  Show current configuration"
     echo "  --reset-config            Reset to default configuration"
-    echo "  --fstab                   Generate fstab entries (interactive choice)"
+    echo "  --fstab [CHOICE]          Generate fstab entries (with optional choice)"
     echo "  --dry-run                 Preview actions without executing"
     echo "  -h, --help                Show this help"
     echo ""
