@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_VERSION="3.0.0"
+SCRIPT_VERSION="3.0.1"
 
 # $USER detection 
 if [ -n "$SUDO_USER" ]; then
