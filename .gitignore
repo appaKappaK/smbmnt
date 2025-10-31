@@ -1,6 +1,7 @@
 # Symlinks to system locations
 config
 smbmnt
-
+discovered_servers
+smbmnt.log
 # History/backup folders
 history-*
