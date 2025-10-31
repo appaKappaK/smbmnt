@@ -163,7 +163,7 @@ show_usage() {
     echo "    smbmnt -S 192.168.0.0/24        # Scan specific network"
     echo "    smbmnt -Ss 10.8.0.1             # Scan shares on specific server"
     echo "    smbmnt -D                       # Use discovered server"
-    echo "    smbmnt --fstab                  # Generate fstab entries (interactive)"
+    echo "    smbmnt --fstab [CHOICE]         # Generate fstab entries (optional)"
     echo "    smbmnt --config                 # Show current configuration"
     echo ""
     echo "  Dry-run Examples:"
