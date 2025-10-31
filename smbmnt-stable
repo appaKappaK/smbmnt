@@ -19,7 +19,7 @@ if [ ! -d "$ACTUAL_USER_HOME" ] || [ ! -r "$ACTUAL_USER_HOME" ]; then
     exit 1
 fi
 
-# defaults
+# defaults (pre config update)
 DEFAULT_SERVER="YourSambaIP"
 DEFAULT_CREDENTIALS="$ACTUAL_USER_HOME/.smbcredentials"
 DEFAULT_SHARES=("ShareName" )
