@@ -55,14 +55,17 @@ mkdir -p "$CACHE_DIR"
 touch "$LOG_FILE" 2>/dev/null && chmod 644 "$LOG_FILE" 2>/dev/null
 
 log_message() {
-    local level="$1"
-    local message="$2"
+    local level
+    level="$1"
+    local message
+    message="$2"
     echo "$(date '+%Y-%m-%d %H:%M:%S') [$level] $message" >> "$LOG_FILE"
     echo -e "$message"
 }
 
 validate_server() {
-    local server="$1"
+    local server
+    server="$1"
     
     if [[ "$server" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
         IFS='.' read -ra octets <<< "$server"
@@ -82,13 +85,16 @@ validate_server() {
 }
 
 validate_number() {
-    local input="$1"
-    local max="$2"
+    local input
+    input="$1"
+    local max
+    max="$2"
     [[ "$input" =~ ^[0-9]+$ ]] && [ "$input" -ge 1 ] && [ "$input" -le "$max" ]
 }
 
 check_dependency() {
-    local dep="$1"
+    local dep
+    dep="$1"
     if ! command -v "$dep" &> /dev/null; then
         log_message "ERROR" "${RED}Missing dependency: $dep${NC}"
         return 1
@@ -97,8 +103,10 @@ check_dependency() {
 }
 
 check_dependencies() {
-    local deps=("nmap" "smbclient" "mountpoint")
-    local missing=()
+    local deps
+    deps=("nmap" "smbclient" "mountpoint")
+    local missing
+    missing=()
 
     for dep in "${deps[@]}"; do
         if ! check_dependency "$dep"; then
@@ -199,9 +207,11 @@ load_config() {
 }
 
 save_config() {
-    local server="$1"
+    local server
+    server="$1"
     shift
-    local shares=("$@")
+    local shares
+    shares=("$@")
     
     if [ -z "$server" ]; then
         log_message "ERROR" "${RED}Server cannot be empty${NC}"
@@ -352,7 +362,8 @@ detect_network() {
 }
 
 discover_servers() {
-    local network="$1"
+    local network
+    network="$1"
     
     if [ -z "$network" ]; then
         if ! network=$(detect_network); then
@@ -370,8 +381,10 @@ discover_servers() {
     
     nmap "${NMAP_OPTIONS[@]}" "$network" 2>/dev/null | grep -E "Nmap scan report|445/tcp" > "$temp_file"
 
-    local servers=()
-    local current_ip=""
+    local servers
+    servers=()
+    local current_ip
+    current_ip=""
 
     while IFS= read -r line; do
         if [[ "$line" =~ "Nmap scan report for" ]]; then
@@ -400,8 +413,10 @@ discover_servers() {
     fi
 
     for i in "${!servers[@]}"; do
-        local ip="${servers[$i]}"
-        local hostname=""
+        local ip
+        ip="${servers[$i]}"
+        local hostname
+        hostname=""
 
         echo "Testing server (5-10s) $ip..."
 
@@ -426,7 +441,8 @@ discover_servers() {
 }
 
 scan_shares() {
-    local server_ip="$1"
+    local server_ip
+    server_ip="$1"
     
     if [ -z "$server_ip" ]; then
         log_message "ERROR" "${RED}Server IP required${NC}"
@@ -498,9 +514,11 @@ scan_shares() {
 }
 
 update_script_config() {
-    local selected_server="$1"
+    local selected_server
+    selected_server="$1"
     shift
-    local discovered_shares=("$@")
+    local discovered_shares
+    discovered_shares=("$@")
     
     log_message "INFO" "${BLUE}Saving configuration...${NC}"
     
@@ -517,12 +535,15 @@ update_script_config() {
 }
 
 generate_fstab() {
-    local choice="$1"
-    local dry_run="${2:-false}"  
+    local choice
+    choice="$1"
+    local dry_run
+    dry_run="${2:-false}"  
 
     log_message "INFO" "${BLUE}Generating fstab entries...${NC}"
 
-    local fstab_entries=()
+    local fstab_entries
+    fstab_entries=()
     local share mount_point entry
 
     if [ -z "$choice" ]; then
@@ -579,9 +600,12 @@ generate_fstab() {
 
     log_message "INFO" "${YELLOW}Adding to /etc/fstab (requires sudo)...${NC}"
 
-    local added_count=0
-    local skipped_count=0
-    local error_count=0
+    local added_count
+    added_count=0
+    local skipped_count
+    skipped_count=0
+    local error_count
+    error_count=0
 
     for entry in "${fstab_entries[@]}"; do
         if ! grep -Fxq "$entry" /etc/fstab 2>/dev/null; then
@@ -620,7 +644,8 @@ show_status() {
     log_message "INFO" " ║                        SMB Mount Status                           ║"
     log_message "INFO" " ╚═══════════════════════════════════════════════════════════════════════╝${NC}"
 
-    local mounted_count=0
+    local mounted_count
+    mounted_count=0
 
     log_message "INFO" "${CYAN}Currently Mounted SMB Shares:${NC}"
     log_message "INFO" ""
@@ -629,7 +654,8 @@ show_status() {
     printf "%-20s %-25s %-15s %-10s\n" "----------" "-----------" "------" "----"
 
     for share in "${SHARES[@]}"; do
-        local mount_point="$MOUNT_BASE/samba-${share,,}"
+        local mount_point
+        mount_point="$MOUNT_BASE/samba-${share,,}"
         if mountpoint -q "$mount_point" 2>/dev/null || mount | grep -q "$mount_point"; then
             local server_info
             server_info=$(mount | grep "$mount_point" | sed 's/.*\/\/\([^/]*\)\/.*/\1/')
@@ -684,9 +710,12 @@ use_discovered() {
     log_message "INFO" "${BLUE}Discovered SMB Servers:${NC}"
     log_message "INFO" ""
 
-    local servers=()
-    local hostnames=()
-    local i=1
+    local servers
+    servers=()
+    local hostnames
+    hostnames=()
+    local i
+    i=1
 
     while IFS=':' read -r ip hostname; do
         if [ -n "$ip" ]; then
@@ -712,7 +741,8 @@ use_discovered() {
 
     if [ ${#servers[@]} -eq 1 ]; then
         SERVER="${servers[0]}"
-        local selected_hostname="${hostnames[0]}"
+        local selected_hostname
+        selected_hostname="${hostnames[0]}"
         
         if [ -n "$selected_hostname" ]; then
             log_message "INFO" "${CYAN}Only one server found: $SERVER ($selected_hostname)${NC}"
@@ -739,9 +769,11 @@ use_discovered() {
             fi
             
             if validate_number "$choice" "${#servers[@]}"; then
-                local index=$((choice-1))
+                local index
+                index=$((choice-1))
                 SERVER="${servers[$index]}"
-                local selected_hostname="${hostnames[$index]}"
+                local selected_hostname
+                selected_hostname="${hostnames[$index]}"
                 
                 if [ -n "$selected_hostname" ]; then
                     log_message "INFO" "${GREEN}Selected server: $SERVER ($selected_hostname)${NC}"
@@ -768,8 +800,10 @@ use_discovered() {
 }
 
 add_to_side_panel() {
-    local mount_point="$1"
-    local share_name="$2"
+    local mount_point
+    mount_point="$1"
+    local share_name
+    share_name="$2"
     
     log_message "INFO" "${PURPLE}Adding to side panel...${NC}"
     
@@ -796,8 +830,10 @@ add_to_side_panel() {
 }
 
 remove_from_side_panel() {
-    local mount_point="$1"
-    local share_name="$2"
+    local mount_point
+    mount_point="$1"
+    local share_name
+    share_name="$2"
 
     log_message "INFO" "${YELLOW}Removing from side panel...${NC}"
 
@@ -815,10 +851,14 @@ remove_from_side_panel() {
 }
 
 mount_share() {
-    local share_name="$1"
-    local dry_run="${2:-false}"
-    local mount_point="$MOUNT_BASE/samba-${share_name,,}"
-    local share_path="//$SERVER/$share_name"
+    local share_name
+    share_name="$1"
+    local dry_run
+    dry_run="${2:-false}"
+    local mount_point
+    mount_point="$MOUNT_BASE/samba-${share_name,,}"
+    local share_path
+    share_path="//$SERVER/$share_name"
 
     if [[ ! "$share_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
         log_message "ERROR" "${RED}Invalid share name: $share_name${NC}"
@@ -879,8 +919,10 @@ mount_share() {
 }
 
 unmount_share() {
-    local share_name="$1"
-    local dry_run="${2:-false}"  
+    local share_name
+    share_name="$1"
+    local dry_run
+    dry_run="${2:-false}"  
     local mount_point
     mount_point="$MOUNT_BASE/samba-${share_name,,}"
 
@@ -939,7 +981,8 @@ list_shares() {
     log_message "INFO" "${CYAN}Available shares on $SERVER:${NC}"
     log_message "INFO" "$(printf '=%.0s' {1..50})"
     
-    local mounted_count=0
+    local mounted_count
+    mounted_count=0
     local total_count
     total_count=${#SHARES[@]}
     
@@ -948,8 +991,10 @@ list_shares() {
         share="${SHARES[$i]}"
         local mount_point
         mount_point="$MOUNT_BASE/samba-${share,,}"
-        local status=""
-        local size_info=""
+        local status
+        status=""
+        local size_info
+        size_info=""
         
         if mountpoint -q "$mount_point" 2>/dev/null; then
             status="${GREEN}● MOUNTED${NC}"
@@ -964,7 +1009,8 @@ list_shares() {
         log_message "INFO" "$((i+1))) $share $status"
     done
     
-    local summary_color="$GREEN"
+    local summary_color
+    summary_color="$GREEN"
     if [ "$mounted_count" -eq 0 ]; then
         summary_color="$YELLOW"
     elif [ "$mounted_count" -lt "$total_count" ]; then
@@ -976,9 +1022,12 @@ list_shares() {
 }
 
 process_choices() {
-    local choice="$1"
-    local action="$2"
-    local dry_run="${3:-false}"  
+    local choice
+    choice="$1"
+    local action
+    action="$2"
+    local dry_run
+    dry_run="${3:-false}"  
     
     if [[ "$choice" == "all" ]]; then
         log_message "INFO" "${BLUE}${action^}ing all shares...${NC}"
