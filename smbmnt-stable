@@ -167,12 +167,12 @@ show_usage() {
     echo "    smbmnt --fstab all              # Generate fstab for all shares"
     echo "    smbmnt --fstab 1,3              # Generate fstab for shares 1 and 3"
     echo "    smbmnt --config                 # Show current configuration"
-
     echo ""
     echo "  Dry-run Examples:"
     echo "    smbmnt --dry-run all            # Preview mounting all shares"
     echo "    smbmnt --dry-run -u all         # Preview unmounting all shares"
     echo "    smbmnt --dry-run --fstab all    # Preview fstab generation"
+    echo ""
 }
 
 load_config() {
