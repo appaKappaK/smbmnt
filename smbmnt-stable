@@ -487,7 +487,7 @@ scan_shares() {
     read -r -p "Save these settings to your configuration? (y/N): " auto_config
     if [[ "$auto_config" =~ ^[Yy]$ ]]; then
         if update_script_config "$server_ip" "${shares[@]}"; then
-            log_message "INFO" "${CYAN}Run './smbmnt-stable' to mount shares${NC}"
+            log_message "INFO" "${CYAN}'smbmnt' to list and mount shares${NC}"
             exit 0  
         fi
     fi
