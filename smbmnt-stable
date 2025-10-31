@@ -33,7 +33,7 @@ MOUNT_BASE="/mnt"
 SMB_VERSION="3.1.1"
 
 # network config 
-NETWORK_SCAN_PREFERENCE="" # 192...|10...
+NETWORK_SCAN_PREFERENCE="" # 192...|10...|172...
 NMAP_OPTIONS=(-Pn -n -p 445 --open --min-rate 1000)
 
 # paths
