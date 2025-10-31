@@ -127,7 +127,9 @@ validate_number() {
 sanitize_input() {
     local input
     input="$1"
-    echo "$input" | tr -d ';|&$()<>`'
+    # shellcheck disable=SC2016
+    local dangerous_chars='`;|&$()<>'
+    echo "$input" | tr -d "$dangerous_chars"
 }
 
 check_dependency() {
