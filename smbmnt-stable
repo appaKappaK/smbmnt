@@ -487,7 +487,7 @@ scan_shares() {
     read -r -p "Save these settings to your configuration? (y/N): " auto_config
     if [[ "$auto_config" =~ ^[Yy]$ ]]; then
         if update_script_config "$server_ip" "${shares[@]}"; then
-            log_message "INFO" "${CYAN}'smbmnt' to list and mount shares${NC}"
+            log_message "INFO" "${CYAN}Run 'smbmnt' to mount shares${NC}"
             exit 0  
         fi
     fi
@@ -711,18 +711,19 @@ use_discovered() {
         local selected_hostname="${hostnames[0]}"
         
         if [ -n "$selected_hostname" ]; then
-            log_message "INFO" "${GREEN}Using server: $SERVER ($selected_hostname)${NC}"
+            log_message "INFO" "${CYAN}Only one server found: $SERVER ($selected_hostname)${NC}"
         else
-            log_message "INFO" "${GREEN}Using server: $SERVER${NC}"
+            log_message "INFO" "${CYAN}Only one server found: $SERVER${NC}"
         fi
         
         log_message "INFO" ""
 
-        read -r -p "Scan for available shares on this server? (Y/n): " scan_choice
-        if [[ ! "$scan_choice" =~ ^[Nn]$ ]]; then
+        read -r -p "Use and scan this server? (Y/n): " scan_choice
+        if [[ "$scan_choice" =~ ^[Yy]$ || -z "$scan_choice" ]]; then
             scan_shares "$SERVER"
         else
-            log_message "INFO" "${YELLOW}Skipping share scan${NC}"
+            log_message "INFO" "${YELLOW}Skipping server${NC}"
+            return 1
         fi
     else
         while true; do
@@ -747,7 +748,7 @@ use_discovered() {
                 log_message "INFO" ""
 
                 read -r -p "Scan for available shares on this server? (Y/n): " scan_choice
-                if [[ ! "$scan_choice" =~ ^[Nn]$ ]]; then
+                if [[ "$scan_choice" =~ ^[Yy]$ || -z "$scan_choice" ]]; then
                     scan_shares "$SERVER"
                 else
                     log_message "INFO" "${YELLOW}Skipping share scan${NC}"
