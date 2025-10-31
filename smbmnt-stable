@@ -75,8 +75,27 @@ validate_server() {
                 return 1
             fi
         done
+        
+        if [[ "$2" == "check_reachability" ]]; then
+            if ! ping -c 1 -W 2 "$server" &>/dev/null; then
+                log_message "WARNING" "${YELLOW}Server $server may not be reachable${NC}"
+            fi
+        fi
+        
         return 0
+        
     elif [[ "$server" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+        if [[ "$server" =~ ^- ]] || [[ "$server" =~ -$ ]] || [[ "$server" =~ ^\. ]] || [[ "$server" =~ \.$ ]]; then
+            log_message "ERROR" "${RED}Invalid hostname format: $server${NC}"
+            return 1
+        fi
+        
+        if [[ "$2" == "check_dns" ]]; then
+            if ! getent hosts "$server" &>/dev/null && ! nslookup "$server" &>/dev/null; then
+                log_message "WARNING" "${YELLOW}Hostname $server may not resolve in DNS${NC}"
+            fi
+        fi
+        
         return 0
     else
         log_message "ERROR" "${RED}Invalid server format: $server${NC}"
@@ -89,7 +108,26 @@ validate_number() {
     input="$1"
     local max
     max="$2"
-    [[ "$input" =~ ^[0-9]+$ ]] && [ "$input" -ge 1 ] && [ "$input" -le "$max" ]
+    local min
+    min="${3:-1}"  
+    
+    if [[ ! "$input" =~ ^[0-9]+$ ]]; then
+        log_message "DEBUG" "Input '$input' is not a valid number"
+        return 1
+    fi
+    
+    if [ "$input" -lt "$min" ] || [ "$input" -gt "$max" ]; then
+        log_message "DEBUG" "Input '$input' outside range $min-$max"
+        return 1
+    fi
+    
+    return 0
+}
+
+sanitize_input() {
+    local input
+    input="$1"
+    echo "$input" | tr -d ';|&$()<>`'
 }
 
 check_dependency() {
