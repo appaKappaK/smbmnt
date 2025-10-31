@@ -13,9 +13,9 @@
 ---
 #### Update History
 ```
-    - Auto adds found shares and server IP so you do not need to manually do it # VER 1
-    - Better fitting parameters # VER 1
-    - Changed NMAP_OPTIONS from string to array # VER 1
+    - Auto adds found shares and server IP so you do not need to manually do it # VER 2
+    - Better fitting parameters # VER 2
+    - Changed NMAP_OPTIONS from string to array # VER 2
     - Changed how bookmarking detects pre-existing mounts/folders/share-names # VER 2
     - Log Rotation # VER 2
     - Added nofail to mount parameters for --fstab # VER 2
