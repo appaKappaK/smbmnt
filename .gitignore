@@ -4,6 +4,3 @@ smbmnt
 
 # History/backup folders
 history-*
-
-# Files
-.gitignore
