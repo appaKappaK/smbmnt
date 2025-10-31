@@ -1,0 +1,6 @@
+# Symlinks to system locations
+config
+smbmnt
+
+# History/backup folders
+history-*
