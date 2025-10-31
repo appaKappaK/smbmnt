@@ -698,7 +698,7 @@ use_discovered() {
     done < "$DISCOVERED_SERVERS_FILE"
 
     log_message "INFO" ""
-    log_message "INFO" "   ${YELLOW}0) Cancel${NC}"
+    log_message "INFO" "${YELLOW}0) Cancel${NC}"
     log_message "INFO" ""
 
     if [ ${#servers[@]} -eq 0 ]; then
