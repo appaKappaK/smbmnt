@@ -102,6 +102,7 @@ smbmnt -ls|--list # List available shares
 smbmnt --fstab # Interactive fstab generation
 smbmnt --fstab all # Generate fstab entries for all shares
 smbmnt --fstab 1,2 # Generate fstab entries for shares 1,2
+smbmnt --dry-run --fstab all # Preview fstab generation"
 ```
 
 #### Advanced Options
