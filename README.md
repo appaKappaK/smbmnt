@@ -51,7 +51,6 @@ ___
 ```
 username=your_username
 password=your_password
-#domain=your_domain
 ```
 
 **Important to set permissions:** `chmod 600 ~/.smbcredentials`
