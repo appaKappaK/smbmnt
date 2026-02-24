@@ -1,0 +1,332 @@
+.TH SMBMNT 1 "2025-02-24" "smbmnt 3.1.0" "User Commands"
+.SH NAME
+smbmnt \- interactive SMB/CIFS share mount manager with network discovery
+.SH SYNOPSIS
+.B smbmnt
+[\fIOPTIONS\fR] [\fICHOICE\fR]
+.SH DESCRIPTION
+.B smbmnt
+is a secure, interactive command-line tool for mounting and managing SMB/CIFS
+network shares on Linux. It fills the gap between the verbose
+.BR mount (8)
+command and static
+.IR /etc/fstab
+entries, providing network discovery, share enumeration, credential management,
+and persistent configuration without requiring manual option memorisation.
+.PP
+When invoked without arguments,
+.B smbmnt
+enters interactive mode and presents a numbered list of configured shares to
+mount. Individual shares, comma-separated lists, or all shares can also be
+selected non-interactively.
+.PP
+Network discovery uses
+.BR nmap (1)
+to locate SMB servers on the local network or a specified CIDR range. Share
+enumeration uses
+.BR smbclient (1).
+Both tools are required only when their respective operations are invoked;
+they are not needed for ordinary mount/unmount operations.
+.SH OPTIONS
+.SS "Server & Credentials"
+.TP
+.BR \-ip ", " \-\-server " " \fIIP\fR
+Set the SMB server address for this session. Accepts IPv4 addresses or
+hostnames. Overrides the saved configuration.
+.TP
+.BR \-c ", " \-\-credentials " " \fIFILE\fR
+Path to a credentials file. Defaults to
+.IR ~/.smbcredentials .
+The file must be owned by the invoking user and have permissions
+.BR 600 .
+.TP
+.B \-\-smb-version \fIVER\fR
+Override the SMB dialect negotiated by
+.BR mount.cifs (8).
+Default is
+.BR 3.1.1 .
+Use
+.B 2.1
+or
+.B 3.0
+for older servers that do not support SMBv3.1.1.
+.TP
+.B \-\-mount-base \fIDIR\fR
+Base directory under which mount points are created.
+Default is
+.IR /mnt .
+Mount points are named
+.IR /mnt/samba-<server>-<share> .
+.SS "Mount Operations"
+.TP
+.RI [ CHOICE ]
+Mount one or more shares non-interactively.
+.I CHOICE
+is a share number (1\-N), a comma-separated list
+.RI ( 1,3,5 ),
+or
+.BR all .
+Omitting
+.I CHOICE
+enters interactive mode.
+.SS "Unmount Operations"
+.TP
+.BR \-u ", " \-\-unmount " [" \fICHOICE\fR ]
+Unmount shares.
+.I CHOICE
+follows the same syntax as for mounting. Omitting
+.I CHOICE
+enters interactive unmount mode.
+.TP
+.BI unmount " [CHOICE]"
+Standalone form of unmount; equivalent to
+.B \-u
+.RI [ CHOICE ].
+.SS "Discovery"
+.TP
+.BR \-S ", " \-\-scan " [" \fINETWORK\fR ]
+Discover SMB servers on the network.
+.I NETWORK
+is a CIDR range such as
+.BR 192.168.1.0/24 .
+If omitted,
+.B smbmnt
+auto-detects the local RFC\~1918 network from the routing table.
+Results are cached in
+.IR ~/.cache/smbmnt/discovered_servers .
+Requires
+.BR nmap (1).
+.TP
+.BR \-Ss ", " \-\-scan-shares " " \fIIP\fR
+List available shares on
+.I IP
+and offer to save them to the configuration file.
+Requires
+.BR smbclient (1).
+.TP
+.BR \-D ", " \-\-discovered
+Load a previously discovered server from the cache and optionally scan its
+shares, replacing the active configuration for this session.
+.SS "Status & Configuration"
+.TP
+.BR \-st ", " \-\-status
+Display a dashboard showing currently mounted shares, server information, and
+system state.
+.TP
+.BR \-ls ", " \-\-list
+List the shares in the current configuration with their index numbers.
+.TP
+.B \-\-config
+Print the active configuration: server address, share list, config file
+location, and modification time.
+.TP
+.B \-\-reset-config
+Remove the saved configuration file and revert to compiled-in defaults.
+A timestamped backup of the removed file is kept.
+.SS "Fstab Generation"
+.TP
+.B \-\-fstab \fR[\fICHOICE\fR]
+Generate
+.BR fstab (5)
+entries for the selected shares.
+.I CHOICE
+follows the same syntax as for mounting. Omitting
+.I CHOICE
+enters interactive selection. Generated entries include the
+.B nofail
+option so that a missing share does not prevent boot.
+.SS "Dry-run & Debug"
+.TP
+.B \-\-dry-run
+Print the actions that would be taken without executing them. Combinable
+with mount, unmount, and fstab operations.
+.TP
+.B \-\-debug
+Enable verbose diagnostic output to stderr. Equivalent to setting the
+environment variable
+.BR SMBMNT_DEBUG=true .
+Debug output is never written to the log file in production mode.
+.SS "Miscellaneous"
+.TP
+.BR \-h ", " \-\-help
+Print a usage summary and exit.
+.TP
+.B \-\-version
+Print the version string and exit.
+.SH CHOICE SYNTAX
+The
+.I CHOICE
+argument accepted by mount, unmount, and fstab operations follows a consistent
+syntax:
+.TP
+.I N
+A single share by its list index (1\-based).
+.TP
+.IB N , M , ...
+A comma-separated list of share indices.
+.TP
+.B all
+Every configured share.
+.SH EXAMPLES
+.SS Initial setup
+.nf
+# Discover SMB servers on the local network:
+smbmnt \-S
+
+# Enumerate shares on a specific server and save the configuration:
+smbmnt \-Ss 192.168.1.100
+.fi
+.SS Mounting
+.nf
+# Interactive mount mode:
+smbmnt
+
+# Mount all shares:
+sudo smbmnt all
+
+# Mount shares 1 and 3:
+sudo smbmnt 1,3
+
+# Preview without executing:
+smbmnt \-\-dry-run all
+.fi
+.SS Unmounting
+.nf
+# Interactive unmount mode:
+smbmnt \-u
+
+# Unmount all shares:
+sudo smbmnt \-u all
+
+# Preview unmount:
+smbmnt \-\-dry-run \-u all
+.fi
+.SS One-off overrides
+.nf
+# Mount using a different server without modifying saved config:
+sudo smbmnt \-ip 10.8.0.2 all
+
+# Mount using an alternative credentials file:
+sudo smbmnt \-c /etc/smbmnt/corp.creds all
+
+# Force SMB 2.1 dialect for a legacy server:
+sudo smbmnt \-\-smb-version 2.1 all
+.fi
+.SS Fstab generation
+.nf
+# Generate fstab entries for all shares and preview first:
+smbmnt \-\-dry-run \-\-fstab all
+sudo smbmnt \-\-fstab all
+.fi
+.SS Diagnostics
+.nf
+# Show current configuration:
+smbmnt \-\-config
+
+# Show mount status dashboard:
+smbmnt \-st
+
+# Enable debug output:
+smbmnt \-\-debug \-Ss 192.168.1.100
+SMBMNT_DEBUG=true smbmnt \-S
+.fi
+.SH FILES
+.TP
+.I ~/.smbcredentials
+Default SMB credentials file. Must contain
+.B username=
+and
+.B password=
+lines and optionally a
+.B domain=
+line. Must be owned by the invoking user with permissions
+.BR 600 .
+.TP
+.I ~/.config/smbmnt/config
+Saved server and share configuration, written by
+.B \-Ss
+and
+.BR \-D .
+Parsed with
+.BR grep (1)
+and
+.BR sed (1);
+never sourced by the shell.
+.TP
+.I ~/.cache/smbmnt/smbmnt.log
+Operational log with timestamps and severity levels. ANSI colour codes are
+stripped before writing.
+.TP
+.I ~/.cache/smbmnt/discovered_servers
+Cache of servers found by
+.BR \-S .
+Format is
+.IB ip : hostname
+per line; hostname may be empty.
+.TP
+.IR /mnt/samba- < server >- < share >
+Default mount point created for each share. The server component prevents
+collisions when mounting shares from multiple hosts.
+.SH ENVIRONMENT
+.TP
+.B SMBMNT_DEBUG
+Set to
+.B true
+to enable debug output. Equivalent to passing
+.BR \-\-debug .
+.SH SECURITY
+Credentials files are validated for existence, correct ownership, and
+.B 600
+permissions before any mount operation. Configuration files are parsed
+with
+.B grep
+and
+.B sed
+rather than being sourced, preventing shell injection from a tampered
+config file. User input containing shell-significant characters
+.RB ( ; | & $ ( ) < > ` )
+is rejected outright and never silently sanitised.
+IPv4 addresses are validated to reject leading zeros that would be
+interpreted as octal by some programs.
+.B nmap
+and
+.B smbclient
+are invoked only when their specific operations are requested; they are
+not required at startup.
+.SH DEPENDENCIES
+.TP
+.BR mountpoint (1)
+Required at startup. Part of
+.BR util-linux .
+.TP
+.BR mount.cifs (8)
+Required for all mount and unmount operations. Part of
+.BR cifs-utils .
+.TP
+.BR smbclient (1)
+Required only for share scanning
+.RB ( \-Ss ).
+.TP
+.BR nmap (1)
+Required only for network scanning
+.RB ( \-S ).
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+An error occurred (invalid argument, missing dependency, failed mount, etc.).
+.SH BUGS
+Report bugs at
+.I https://github.com/appaKappaK/smbmnt/issues
+.SH AUTHOR
+Written by appaKappaK.
+.SH LICENSE
+GNU General Public License version 2 or later.
+.SH SEE ALSO
+.BR mount.cifs (8),
+.BR fstab (5),
+.BR smbclient (1),
+.BR nmap (1),
+.BR mountpoint (1)

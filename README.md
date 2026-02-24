@@ -4,6 +4,12 @@ A secure, interactive SMB mount manager with network discovery support for LAN a
 
 ---
 
+## Why smbmnt?
+
+Linux SMB mounting lives in an awkward triangle: `mount -t cifs` (powerful but verbose), `/etc/fstab` (static and brittle), and file managers (GUI-only and inconsistent). smbmnt fills the missing middle — a secure, interactive CLI that remembers servers, discovers shares, and manages mounts without requiring you to memorise options or edit config files by hand.
+
+---
+
 ## Features
 
 - **Network Discovery** — Scan networks for SMB servers using nmap
@@ -22,7 +28,8 @@ A secure, interactive SMB mount manager with network discovery support for LAN a
 
 | Tool | When Required |
 |------|--------------|
-| `mountpoint` | Always (startup check) |
+| `mountpoint` | Always (part of `util-linux`) |
+| `mount.cifs` | Mount/unmount operations (part of `cifs-utils`) |
 | `smbclient` | Only for share scanning (`-Ss`) |
 | `nmap` | Only for network scanning (`-S`) |
 
@@ -33,13 +40,28 @@ A secure, interactive SMB mount manager with network discovery support for LAN a
 
 ## Installation
 
+### Quick install
+
 ```bash
 git clone https://github.com/appaKappaK/smbmnt.git
-sudo mv smbmnt/smbmnt-stable /usr/local/bin/smbmnt
-sudo chmod +x /usr/local/bin/smbmnt
+cd smbmnt
+sudo make install
 ```
 
-#### Credentials File
+`make install` copies the script to `/usr/local/bin/smbmnt`, installs the man
+page to `/usr/local/share/man/man1/`, and installs bash completion if present.
+Override the prefix with `PREFIX=/usr sudo make install`.
+
+### Manual install
+
+```bash
+sudo cp smbmnt-stable /usr/local/bin/smbmnt
+sudo chmod 755 /usr/local/bin/smbmnt
+sudo cp smbmnt.1 /usr/local/share/man/man1/
+sudo gzip /usr/local/share/man/man1/smbmnt.1
+```
+
+### Credentials file
 
 Create `~/.smbcredentials`:
 
@@ -148,7 +170,12 @@ smbmnt --version                # Show version
 
 ## Update History
 
-#### v3.0.2.x — Hardening Series (3.0.2.1 → 3.0.2.7.BETA)
+#### v3.1.0 — Stable Release (2025-02-24)
+- First release intended for distribution packaging
+- All hardening from the 3.0.2.x series included
+- Stable CLI interface and man page
+
+#### v3.0.2.x — Hardening Series (3.0.2.1 → 3.0.2.7)
 - `set -euo pipefail` — strict error handling throughout
 - Replaced silent input mutation with strict rejection (`validate_input`)
 - Lazy dependency enforcement — nmap/smbclient only required at point of use
@@ -175,6 +202,14 @@ smbmnt --version                # Show version
 - Fixed script path resolution for system-wide installation (`/usr/local/bin`)
 - Log rotation
 - Various fixes and improvements
+
+---
+
+## Support & Contributions
+
+- **Issues**: https://github.com/appaKappaK/smbmnt/issues
+- **Pull requests** welcome with a clear description of the change
+- I maintain this actively and respond to issues within a reasonable timeframe
 
 ---
 
