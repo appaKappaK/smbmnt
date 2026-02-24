@@ -106,7 +106,7 @@ validate_server() {
 
         if [[ "$2" == "check_dns" ]]; then
             # Prefer getent; fall back to host (nslookup is deprecated on modern systems)
-            if ! getent hosts "$server" &>/dev/null && ! host "$server" &>/dev/null 2>/dev/null; then
+            if ! getent hosts "$server" &>/dev/null && ! host "$server" &>/dev/null; then
                 log_message "WARNING" "${YELLOW}Hostname $server may not resolve in DNS${NC}"
             fi
         fi
