@@ -1,10 +1,10 @@
 # Symlinks to system locations
 config
 smbmnt
-\discovered_servers
+discovered_servers/
 smbmnt.log
 # History/backup folders
-\history
-\future
-\revisions
+history/
+future/
+revisions/
 
