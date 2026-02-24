@@ -278,7 +278,8 @@ load_config() {
             echo "🔍 DEBUG: About to validate server: '${parsed_server}'" >&2
             
             # Validate the server value from config before accepting it
-            if ! validate_server "$parsed_server" 2>/dev/null; then
+            # REMOVED: 2>/dev/null to see actual error messages
+            if ! validate_server "$parsed_server"; then
                 echo "🔍 DEBUG: Server validation FAILED for: '${parsed_server}'" >&2
                 log_message "WARNING" "${YELLOW}Config file contains invalid server value, using defaults${NC}"
                 SERVER="$DEFAULT_SERVER"
