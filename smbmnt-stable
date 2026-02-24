@@ -3,7 +3,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="3.0.2.7.BETA" # or smbmnt-BETA in prod/test (debug mode added, ALPHA -> BETA)
+SCRIPT_VERSION="3.1.0"
 
 # $USER detection — resolve the real invoking user even under sudo
 if [ -n "${SUDO_USER:-}" ]; then
