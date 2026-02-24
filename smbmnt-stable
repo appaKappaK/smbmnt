@@ -3,7 +3,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="3.1.0"
+SCRIPT_VERSION="3.1.0" # LATEST 2/24/26
 
 # $USER detection — resolve the real invoking user even under sudo
 if [ -n "${SUDO_USER:-}" ]; then
