@@ -78,15 +78,14 @@ log_message() {
 
 validate_server() {
     local server="$1"
+    local check_type="${2:-}"  # Default to empty string if $2 is not set
     
-    # DEBUG: Show we entered the function
-    echo "🔍 DEBUG: validate_server START with: '$server'" >&2
+    echo "🔍 DEBUG: validate_server START with: '$server', check_type: '$check_type'" >&2
 
     if [[ "$server" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
         echo "🔍 DEBUG: Matched IP pattern" >&2
         IFS='.' read -ra octets <<< "$server"
         for octet in "${octets[@]}"; do
-            # Guard against empty, non-numeric, leading-zero, or out-of-range octets
             if [[ -z "$octet" ]] || [[ ! "$octet" =~ ^[0-9]+$ ]] || \
                [[ "$octet" =~ ^0[0-9]+$ ]] || [ "$octet" -gt 255 ]; then
                 echo "🔍 DEBUG: Invalid octet: '$octet'" >&2
@@ -95,7 +94,7 @@ validate_server() {
             fi
         done
 
-        if [[ "$2" == "check_reachability" ]]; then
+        if [[ "$check_type" == "check_reachability" ]]; then
             if ! ping -c 1 -W 2 "$server" &>/dev/null; then
                 log_message "WARNING" "${YELLOW}Server $server may not be reachable${NC}"
             fi
@@ -115,7 +114,7 @@ validate_server() {
         fi
         echo "🔍 DEBUG: Hostname format check PASSED" >&2
 
-        if [[ "$2" == "check_dns" ]]; then
+        if [[ "$check_type" == "check_dns" ]]; then
             echo "🔍 DEBUG: Checking DNS for: $server" >&2
             if ! getent hosts "$server" &>/dev/null && ! host "$server" &>/dev/null; then
                 echo "🔍 DEBUG: DNS check FAILED" >&2
