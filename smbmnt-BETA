@@ -246,27 +246,42 @@ load_config() {
 
         # Extract SERVER value: must be a quoted string on its own line
         parsed_server=$(grep -E '^SERVER="[^"]+"' "$CONFIG_FILE" | head -n1 | sed 's/^SERVER="\(.*\)"$/\1/' || true)
+        
+        # DEBUG: Show what we got from config
+        echo "🔍 DEBUG: Raw server from config: '${parsed_server}'" >&2
 
         # Extract SHARES array content: capture everything between SHARES=( and )
-        # Use sed instead of grep -P to avoid PCRE dependency (portability)
         parsed_shares_raw=$(sed -n 's/^SHARES=(\(.*\))$/\1/p' "$CONFIG_FILE" | head -n1 || true)
+        
+        # DEBUG: Show raw shares
+        echo "🔍 DEBUG: Raw shares from config: '${parsed_shares_raw}'" >&2
 
         if [ -n "$parsed_server" ] && [ -n "$parsed_shares_raw" ]; then
+            # DEBUG: About to validate server
+            echo "🔍 DEBUG: About to validate server: '${parsed_server}'" >&2
+            
             # Validate the server value from config before accepting it
             if ! validate_server "$parsed_server" 2>/dev/null; then
+                echo "🔍 DEBUG: Server validation FAILED for: '${parsed_server}'" >&2
                 log_message "WARNING" "${YELLOW}Config file contains invalid server value, using defaults${NC}"
                 SERVER="$DEFAULT_SERVER"
                 SHARES=("${DEFAULT_SHARES[@]}")
                 return 1
             fi
+            echo "🔍 DEBUG: Server validation PASSED for: '${parsed_server}'" >&2
 
             # Parse individual quoted share names from the SHARES=(...) line
             local parsed_shares=()
             while IFS= read -r share; do
+                # DEBUG: Show each share being processed
+                echo "🔍 DEBUG: Processing share: '${share}'" >&2
+                
                 # Share names must be alphanumeric with underscores/hyphens only
                 if [[ -n "$share" ]] && [[ "$share" =~ ^[a-zA-Z0-9_-]+$ ]]; then
                     parsed_shares+=("$share")
+                    echo "🔍 DEBUG: Share VALID: '${share}'" >&2
                 elif [[ -n "$share" ]]; then
+                    echo "🔍 DEBUG: Share INVALID: '${share}'" >&2
                     log_message "WARNING" "${YELLOW}Skipping invalid share name in config: '$share'${NC}"
                 fi
             done < <(echo "$parsed_shares_raw" | tr ' ' '\n' | sed 's/^"//;s/"$//' | grep -v '^$')
@@ -274,8 +289,15 @@ load_config() {
             if [ ${#parsed_shares[@]} -gt 0 ]; then
                 SERVER="$parsed_server"
                 SHARES=("${parsed_shares[@]}")
-                log_message "INFO" "${GREEN}✓ Loaded config: $SERVER with ${#SHARES[@]} share(s)${NC}"
+                # FIXED: Use ${#SHARES[*]} instead of ${#SHARES[@]} inside string
+                local share_count=${#SHARES[@]}
+                log_message "INFO" "${GREEN}✓ Loaded config: $SERVER with $share_count share(s)${NC}"
+                # FIXED: Use ${SHARES[*]} instead of ${SHARES[@]} inside string
+                local shares_list="${SHARES[*]}"
+                echo "🔍 DEBUG: Final SERVER='${SERVER}', SHARES=($shares_list)" >&2
                 return 0
+            else
+                echo "🔍 DEBUG: No valid shares found!" >&2
             fi
         fi
 
@@ -283,6 +305,9 @@ load_config() {
         log_message "INFO" "${YELLOW}Fix it or run: smbmnt --reset-config${NC}"
         SERVER="$DEFAULT_SERVER"
         SHARES=("${DEFAULT_SHARES[@]}")
+        # FIXED: Use ${SHARES[*]} instead of ${SHARES[@]} inside string
+        local default_shares_list="${SHARES[*]}"
+        echo "🔍 DEBUG: Using defaults: SERVER='${SERVER}', SHARES=($default_shares_list)" >&2
     fi
 }
 
