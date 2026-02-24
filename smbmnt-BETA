@@ -3,14 +3,14 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="3.0.2.7.BETA"
+SCRIPT_VERSION="3.0.2.7.ALPHA"
 
 # $USER detection — resolve the real invoking user even under sudo
-if [ -n "$SUDO_USER" ]; then
+if [ -n "${SUDO_USER:-}" ]; then
     ACTUAL_USER="$SUDO_USER"
     ACTUAL_USER_HOME=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
     ACTUAL_USER_HOME="${ACTUAL_USER_HOME:-$HOME}"
-elif [ -n "$USER" ]; then
+elif [ -n "${USER:-}" ]; then
     ACTUAL_USER="$USER"
     ACTUAL_USER_HOME=$(getent passwd "$USER" 2>/dev/null | cut -d: -f6)
     ACTUAL_USER_HOME="${ACTUAL_USER_HOME:-$HOME}"
