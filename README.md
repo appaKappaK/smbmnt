@@ -1,123 +1,183 @@
-# **smbmnt**
+# smbmnt
 
-- **Network Discovery**: Automatically scan networks for SMB servers using nmap
-- **Share Discovery**: List available shares on discovered servers
-- **Interactive & Command-line Modes**: Full menu-driven interface or direct command execution
-- **Mount Management**: Mount/unmount individual shares or all at once
-- **Desktop Integration**: Automatic GTK bookmarks and home directory symlinks
-- **Status Dashboard**: View mounted shares and system status
-- **Configuration Management**: Save, view, and reset server/share configurations
-- **Dry-run Mode**: Preview actions (mount/unmount) without executing
-- **Fstab Generation**: Create persistent mount configurations
+A secure, interactive SMB mount manager with network discovery support for LAN and WireGuard environments.
 
 ---
-#### Update History
-```
-    - Auto adds found shares and server IP so you do not need to manually do it # VER 2
-    - Better fitting parameters # VER 2
-    - Changed NMAP_OPTIONS from string to array # VER 2
-    - Changed how bookmarking detects pre-existing mounts/folders/share-names # VER 2
-    - Log Rotation # VER 2
-    - Added nofail to mount parameters for --fstab # VER 2
-    - Fixed function so the script can be in system paths # VER 2
-    - Other small fixes/additions... # VER 2
-```
-#### Recent Updates
-```
-    - Implemented versioning
-    - Better configuration setup
-    - Added dry-run 
-    - Better parsing
-    - Improved CLI experience
-    - Visible config/cache paths
-    - Reworked the fstab entry generation
-    - No longer need escalation to set serverIP/shares
-```
-___
 
-#### Requirements 
-- **Required**: `smbclient` `nmap` `mountpoint`
-- **Permissions**: sudo access for mounting/unmounting/fstab entries/mount directories
-- **Credentials**: SMB credentials file with proper permissions (600)
-___
-#### Installation
-1. `git clone https://github.com/appaKappaK/smbmnt.git`
-2. Move script to `mv smbmnt-stable /usr/local/bin/smbmnt`
-3. Make executable: `chmod +x /usr/local/bin/smbmnt`
-4. Create credentials file: `~/.smbcredentials`
+## Features
 
-#### Credentials File Format
+- **Network Discovery** — Scan networks for SMB servers using nmap
+- **Share Discovery** — List available shares on any discovered server
+- **Interactive & CLI Modes** — Full menu-driven interface or direct command execution
+- **Mount Management** — Mount/unmount individual shares or all at once
+- **Status Dashboard** — View mounted shares, server info, and system state
+- **Configuration Management** — Save, view, and reset server/share configurations
+- **Dry-run Mode** — Preview any action before executing it
+- **Fstab Generation** — Create persistent mount entries in `/etc/fstab`
+- **Debug Mode** — Gated debug output via `--debug` or `SMBMNT_DEBUG=true`
+
+---
+
+## Requirements
+
+| Tool | When Required |
+|------|--------------|
+| `mountpoint` | Always (startup check) |
+| `smbclient` | Only for share scanning (`-Ss`) |
+| `nmap` | Only for network scanning (`-S`) |
+
+- **Permissions**: sudo access for mount/unmount/fstab/mount directory creation
+- **Credentials**: SMB credentials file at `~/.smbcredentials` with permissions `600`
+
+---
+
+## Installation
+
+```bash
+git clone https://github.com/appaKappaK/smbmnt.git
+sudo mv smbmnt/smbmnt-stable /usr/local/bin/smbmnt
+sudo chmod +x /usr/local/bin/smbmnt
+```
+
+#### Credentials File
+
+Create `~/.smbcredentials`:
 
 ```
 username=your_username
 password=your_password
+domain=your_domain  # optional
 ```
 
-**Important to set permissions:** `chmod 600 ~/.smbcredentials`
-___
-#### Simple Start
-1. `smbmnt -Ss YOUR_SERVER_IP`  # Discover and save shares
-2. `sudo smbmnt all`            # Mount all shares
-3. `smbmnt --config`            # Verify configuration
-___
+Lock down permissions:
 
-### Usage
+```bash
+chmod 600 ~/.smbcredentials
+```
+
+---
+
+## Quick Start
+
+```bash
+smbmnt -Ss YOUR_SERVER_IP   # Discover and save shares
+sudo smbmnt all             # Mount all shares
+smbmnt --config             # Verify configuration
+smbmnt -st                  # View mount status
+```
+
+---
+
+## Usage
 
 #### Network Discovery
-```
-smbmnt -S|--scan # Auto-detect and scan local network
-smbmnt -S|--scan 192.168.0.0/24 # Scan specific network
-smbmnt -Ss|--scan-shares 10.8.0.1 # List shares on specific server
-smbmnt -D|--discovered # Use previously discovered server(s)
+```bash
+smbmnt -S                       # Auto-detect and scan local network
+smbmnt -S 192.168.0.0/24        # Scan specific network
+smbmnt -Ss 10.8.0.1             # List shares on specific server
+smbmnt -D                       # Use previously discovered server(s)
 ```
 
 #### Mount Operations
-```
-smbmnt # Interactive mount mode
-smbmnt 1 # Mount share #1
-smbmnt 1,3,5 # Mount shares 1, 3, and 5
-smbmnt all # Mount all shares
-smbmnt --dry-run all # Preview mount without executing
+```bash
+smbmnt                          # Interactive mount mode
+smbmnt 1                        # Mount share #1
+smbmnt 1,3,5                    # Mount shares 1, 3, and 5
+smbmnt all                      # Mount all shares
+smbmnt --dry-run all            # Preview mount without executing
 ```
 
 #### Unmount Operations
-```
-smbmnt -u|--unmount # Interactive unmount mode
-smbmnt -u 1 # Unmount share #1
-smbmnt -u all # Unmount all shares
-smbmnt unmount 2 # Unmount share 2 (standalone command)
-smbmnt --dry-run -u all # Preview unmount without executing
-```
-
-#### Config Management
-```
-smbmnt --config # Show current configuration
-smbmnt --reset-config # Reset to default configuration
+```bash
+smbmnt -u                       # Interactive unmount mode
+smbmnt -u 1                     # Unmount share #1
+smbmnt -u all                   # Unmount all shares
+smbmnt unmount 2                # Unmount share 2 (standalone)
+smbmnt --dry-run -u all         # Preview unmount without executing
 ```
 
-#### System Management
-```
-smbmnt -st|--status # Show mount status dashboard
-smbmnt -ls|--list # List available shares
-smbmnt --fstab # Interactive fstab generation
-smbmnt --fstab all # Generate fstab entries for all shares
-smbmnt --fstab 1,2 # Generate fstab entries for shares 1,2
-smbmnt --dry-run --fstab all # Preview fstab generation"
+#### Configuration
+```bash
+smbmnt --config                 # Show current configuration
+smbmnt --reset-config           # Reset to defaults
+smbmnt -ip 192.168.0.123        # Override server for this session
+smbmnt -c /path/to/creds        # Use different credentials file
+smbmnt --smb-version 2.1        # Override SMB dialect (default: 3.1.1)
 ```
 
-#### Advanced Options
+#### System & Status
+```bash
+smbmnt -st                      # Mount status dashboard
+smbmnt -ls                      # List configured shares
+smbmnt --fstab                  # Interactive fstab generation
+smbmnt --fstab all              # Generate fstab entries for all shares
+smbmnt --fstab 1,2              # Generate fstab entries for shares 1 and 2
+smbmnt --dry-run --fstab all    # Preview fstab generation
 ```
-smbmnt -ip 192.168.0.123 # Use different server
-smbmnt -c /path/to/creds # Use different credentials file
-smbmnt --mount-base /media # Use different mount base directory
-smbmnt --dry-run # Preview actions without executing
-```
-___
-### File Locations
 
-- **Log file**: `~/.cache/smbmnt/smbmnt.log`
-- **Cache directory**: `~/.cache/smbmnt/`
-- **Discovered servers**: `~/.cache/smbmnt/discovered_servers`
-- **Configuration file**: `~/.config/smbmnt/config`
-- **Default credentials**: `~/.smbcredentials`
-- **Mount points**: `/mnt/samba-*`
+#### Debug & Diagnostics
+```bash
+smbmnt --debug all              # Mount with debug output enabled
+SMBMNT_DEBUG=true smbmnt -S    # Debug via environment variable
+smbmnt --version                # Show version
+```
+
+---
+
+## File Locations
+
+| Path | Purpose |
+|------|---------|
+| `~/.smbcredentials` | Default credentials file |
+| `~/.config/smbmnt/config` | Saved server/share configuration |
+| `~/.cache/smbmnt/smbmnt.log` | Log file |
+| `~/.cache/smbmnt/discovered_servers` | Cached scan results |
+| `/mnt/samba-<server>-<share>` | Mount points |
+
+---
+
+## Security Notes
+
+- Credentials file is validated for existence, `600` permissions, and correct ownership before any mount operation
+- Config file is parsed with `grep`/`sed` — never sourced — preventing code injection
+- User input is rejected on invalid characters, never silently mutated
+- `nmap` and `smbclient` are only required when their specific operations are invoked
+- Scan and status operations do not require credentials to be present
+
+---
+
+## Update History
+
+#### v3.0.2.x — Hardening Series (3.0.2.1 → 3.0.2.7.BETA)
+- `set -euo pipefail` — strict error handling throughout
+- Replaced silent input mutation with strict rejection (`validate_input`)
+- Lazy dependency enforcement — nmap/smbclient only required at point of use
+- Credentials check gated by operation — scan/status/config work without credentials
+- Config parsing hardened — `source` replaced with safe `grep`/`sed` parsing
+- Removed GTK bookmark and symlink desktop integration (out of scope for CLI tool)
+- `dmesg` removed from unmount path — replaced with `lsof` busy check
+- `grep -P` (PCRE) removed — replaced with portable `sed`
+- `echo -e` replaced with `printf "%b"` throughout
+- `mount | grep` replaced with `/proc/mounts` for deterministic mount detection
+- `trap RETURN` → `trap EXIT` for reliable temp file cleanup
+- IPv4 validation hardened — rejects leading zeros (e.g. `010`) that cause octal ambiguity
+- Mount paths include server IP — prevents collisions across multiple servers
+- Credentials validated for ownership as well as permissions
+- `--smb-version` CLI flag for dialect override (default: 3.1.1)
+- Debug output gated behind `--debug` / `SMBMNT_DEBUG=true` — silent in production
+- ANSI codes stripped from log file output
+
+#### v2.x
+- Auto-saves discovered server IP and shares — no manual configuration needed
+- Improved CLI parameters and ergonomics
+- `NMAP_OPTIONS` converted from string to array
+- `nofail` added to fstab mount parameters
+- Fixed script path resolution for system-wide installation (`/usr/local/bin`)
+- Log rotation
+- Various fixes and improvements
+
+---
+
+## License
+
+GNU GPL v2.0 — see [LICENSE](LICENSE)
