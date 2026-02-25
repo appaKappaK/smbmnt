@@ -36,6 +36,11 @@ Linux SMB mounting lives in an awkward triangle: `mount -t cifs` (powerful but v
 - **Permissions**: sudo access for mount/unmount/fstab/mount directory creation
 - **Credentials**: SMB credentials file at `~/.smbcredentials` with permissions `600`
 
+> **Note for Fedora / systems with Docker or WireGuard interfaces:** `nmap` requires
+> root for raw socket scans. The script uses `sudo nmap` automatically. If auto-detection
+> picks up a Docker bridge instead of your WireGuard interface, pass the network
+> explicitly: `smbmnt -S 10.8.0.0/24`.
+
 ---
 
 ## Installation
@@ -169,6 +174,18 @@ smbmnt --version                # Show version
 ---
 
 ## Update History
+
+#### v3.1.1 — Bug Fix Release (2026-02-24)
+- Fixed `temp_file: unbound variable` crash under `set -euo pipefail` — `local`
+  declaration and `mktemp` assignment are now combined on one line; `trap` uses
+  `${temp_file:-}` to satisfy `-u` without disabling strict mode
+- Fixed network scan producing no results on Fedora and other systems where nmap
+  requires root for raw socket access through WireGuard and similar interfaces —
+  `discover_servers()` now calls `sudo nmap`
+- Fixed nmap grepable output parsing — corrected grep pattern from `445/tcp.*open`
+  to `445/open/tcp` to match actual nmap 7.92 field order (`port/state/protocol`)
+- Added `|| true` to nmap pipeline so `set -e` does not kill the script when no
+  hosts are found (grep exit code 1 on no match)
 
 #### v3.1.0 — Stable Release (2025-02-24)
 - First release intended for distribution packaging
