@@ -188,7 +188,6 @@ smbmnt --version                # Show version
   hosts are found (grep exit code 1 on no match)
 
 #### v3.1.0 — Stable Release (2025-02-24)
-- First release intended for distribution packaging
 - All hardening from the 3.0.2.x series included
 - Stable CLI interface and man page
 
