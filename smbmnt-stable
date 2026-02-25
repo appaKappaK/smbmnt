@@ -3,7 +3,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="3.1.0" # LATEST 2/24/26
+SCRIPT_VERSION="3.1.1" 
 
 # $USER detection — resolve the real invoking user even under sudo
 if [ -n "${SUDO_USER:-}" ]; then
@@ -515,13 +515,12 @@ discover_servers() {
     echo "Scanning network $network..."
     echo "Running scan (30-60 seconds)..."
 
-    local temp_file
-    temp_file=$(mktemp)
+    local temp_file; temp_file=$(mktemp) || { log_message "ERROR" "${RED}Failed to create temp file${NC}"; return 1; }
 
-    trap 'rm -f "$temp_file"' EXIT
+    trap 'rm -f "${temp_file:-}"' EXIT
 
     # Use nmap grepable output (-oG) for more reliable parsing than screen output
-    nmap "${NMAP_OPTIONS[@]}" -oG - "$network" 2>/dev/null | grep "445/tcp.*open" > "$temp_file"
+    sudo nmap "${NMAP_OPTIONS[@]}" -oG - "$network" 2>/dev/null | grep "445/open/tcp" > "$temp_file" || true
 
     local servers=()
 
