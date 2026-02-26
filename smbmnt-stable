@@ -57,7 +57,8 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 mkdir -p "$CACHE_DIR"
-touch "$LOG_FILE" 2>/dev/null && chmod 644 "$LOG_FILE" 2>/dev/null
+# 600 not 644 — debug mode may write credential-adjacent info to the log
+touch "$LOG_FILE" 2>/dev/null && chmod 600 "$LOG_FILE" 2>/dev/null
 
 # Global cleanup trap — removes any temp files created during the run on
 # exit, interrupt (Ctrl+C), or termination signal.
@@ -188,14 +189,6 @@ validate_input() {
     echo "$input"
 }
 
-check_dependency() {
-    local dep="$1"
-    if ! command -v "$dep" &> /dev/null; then
-        log_message "ERROR" "${RED}Missing dependency: $dep${NC}"
-        return 1
-    fi
-    return 0
-}
 
 # require_dependency is called lazily at the point of use, not globally at startup.
 # Only the operations that actually need a tool will enforce its presence.
@@ -1076,33 +1069,34 @@ mount_share() {
         return 1
     fi
 
-    # Warn if credentials file has group or other read/write bits set.
-    # stat -c '%a' gives octal perms as a decimal string; we convert to check
-    # bits 0o044 (group-read + other-read) and 0o022 (group-write + other-write).
-    if [ -f "$CREDENTIALS" ]; then
-        local cred_perms_oct
-        cred_perms_oct=$(stat -c '%a' "$CREDENTIALS" 2>/dev/null || true)
-        if [ -n "$cred_perms_oct" ]; then
-            # Convert octal string to decimal for arithmetic comparison
-            local cred_perms_dec=$(( 8#$cred_perms_oct ))
-            # Check group-read(0o040), group-write(0o020), other-read(0o004), other-write(0o002)
-            if (( (cred_perms_dec & 0x3E) != 0 )); then
-                log_message "WARNING" "${YELLOW}Credentials file has insecure permissions ($cred_perms_oct) — recommend chmod 600 $CREDENTIALS${NC}"
-            fi
-        fi
-    fi
-
-    # DRY RUN
+    # DRY RUN — preview only, credentials not required to be present
     if [ "$dry_run" = true ]; then
         log_message "INFO" "${CYAN}🚫 DRY RUN: Would mount share:${NC}"
         log_message "INFO" "${CYAN}  📁 Share: $share_name${NC}"
         log_message "INFO" "${CYAN}  📍 Mount point: $mount_point${NC}"
         log_message "INFO" "${CYAN}  🔗 Source: $share_path${NC}"
         log_message "INFO" "${CYAN}  👤 Options: credentials=$CREDENTIALS,uid=$(id -u),gid=$(id -g),vers=$SMB_VERSION${NC}"
-
+        [ ! -f "$CREDENTIALS" ] && log_message "INFO" "${CYAN}  ⚠️  Credentials file not found: $CREDENTIALS${NC}"
         mountpoint -q "$mount_point" && log_message "INFO" "${CYAN}  ℹ️  Already mounted${NC}"
         [ ! -d "$mount_point" ] && log_message "INFO" "${CYAN}  📂 Would create directory: $mount_point${NC}"
         return 0
+    fi
+
+    # Verify credentials file exists and has safe permissions
+    if [ ! -f "$CREDENTIALS" ]; then
+        log_message "ERROR" "${RED}Credentials file not found: $CREDENTIALS${NC}"
+        return 1
+    fi
+    # Warn if group or other read/write bits are set.
+    # Converts octal string to decimal then bitmasks:
+    #   0x3E = 0b00111110 covers group-read(040), group-write(020), other-read(004), other-write(002)
+    local cred_perms_oct
+    cred_perms_oct=$(stat -c '%a' "$CREDENTIALS" 2>/dev/null || true)
+    if [ -n "$cred_perms_oct" ]; then
+        local cred_perms_dec=$(( 8#$cred_perms_oct ))
+        if (( (cred_perms_dec & 0x3E) != 0 )); then
+            log_message "WARNING" "${YELLOW}Credentials file has insecure permissions ($cred_perms_oct) — recommend chmod 600 $CREDENTIALS${NC}"
+        fi
     fi
 
     # Already mounted?
@@ -1351,7 +1345,7 @@ list_shares() {
             # Cannot check — smbclient not installed
             exists_icon="⚫"
             exists_color="${YELLOW}"
-        elif printf '%s\n' "${server_shares[@]}" | grep -Fxq "$share"; then
+        elif printf '%s\n' ${server_shares[@]+"${server_shares[@]}"} | grep -Fxq "$share"; then
             exists_icon="🟢"
             exists_color="${GREEN}"
         else
