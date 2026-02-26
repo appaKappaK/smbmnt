@@ -1393,7 +1393,7 @@ main() {
     local choice=""
     local dry_run=false
     local use_discovered_flag=false
-    local scan_network=""
+    local detect_network=""
     local scan_server=""
     local show_status_flag=false
 
@@ -1420,7 +1420,7 @@ main() {
                 use_discovered_flag=true
                 ;;
             -S|--scan)
-                scan_network="${2:-}"
+                detect_network="${2:-}"
                 shift
                 ;;
             -Ss|--scan-shares)
@@ -1472,8 +1472,8 @@ main() {
     fi
 
     # Network scan
-    if [ -n "$scan_network" ]; then
-        discover_servers "$scan_network"
+    if [ -n "$detect_network" ]; then
+        discover_servers "$detect_network"
         exit $?
     fi
 
