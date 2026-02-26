@@ -1044,7 +1044,8 @@ mount_share() {
     fi
 
     # Mount options
-    local mount_options="credentials=$CREDENTIALS,uid=$(id -u),gid=$(id -g),file_mode=0664,dir_mode=0775,vers=$SMB_VERSION,noexec"
+    local mount_options
+    mount_options="credentials=$CREDENTIALS,uid=$(id -u),gid=$(id -g),file_mode=0664,dir_mode=0775,vers=$SMB_VERSION,noexec"
 
     log_message "INFO" "${BLUE}Mounting $share_name...${NC}"
 
