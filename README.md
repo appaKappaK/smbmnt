@@ -20,7 +20,7 @@ Linux SMB mounting lives in an awkward triangle: `mount -t cifs` (powerful but v
 - **Configuration Management** — Save, view, and reset server/share configurations
 - **Dry-run Mode** — Preview any action before executing it
 - **Fstab Generation** — Create persistent mount entries in `/etc/fstab`
-- **Debug Mode** — Gated debug output via `--debug` or `SMBMNT_DEBUG=true`
+- **Debug Mode** — Gated debug output via `--debug` or `SMBMNT_DEBUG=true`; also written to log file when active
 
 ---
 
@@ -129,6 +129,7 @@ smbmnt --config                 # Show current configuration
 smbmnt --reset-config           # Reset to defaults
 smbmnt -ip 192.168.0.123        # Override server for this session
 smbmnt -c /path/to/creds        # Use different credentials file
+smbmnt --mount-base /media/smb  # Override base mount directory for this session
 smbmnt --smb-version 2.1        # Override SMB dialect (default: 3.1.1)
 ```
 
@@ -146,6 +147,8 @@ smbmnt --dry-run --fstab all    # Preview fstab generation
 ```bash
 smbmnt --debug all              # Mount with debug output enabled
 SMBMNT_DEBUG=true smbmnt -S    # Debug via environment variable
+SMBMNT_NO_SUDO=true smbmnt all # Run without any privilege escalation
+SMBMNT_PREFER_SUDO=true smbmnt all  # Always escalate via sudo/doas
 smbmnt --version                # Show version
 ```
 
@@ -174,6 +177,14 @@ smbmnt --version                # Show version
 ---
 
 ## Update History
+
+#### v3.2.0 — Feature Release (2026-02-26)
+- Added `run_maybe_sudo()` — unified privilege escalation helper that tries without sudo first, then falls back to passwordless sudo, interactive sudo, and doas in sequence; avoids redundant escalation when already root
+- Added `SMBMNT_NO_SUDO=true` environment variable to disable all privilege escalation globally
+- Added `SMBMNT_PREFER_SUDO=true` environment variable to always escalate via sudo/doas even when unprivileged execution would suffice
+- Added `--mount-base` CLI flag to override the base mount directory (`/mnt`) for this session
+- Enhanced `list_shares` (`-ls`) with live server existence checking — configured shares are now verified against the server's actual share list and displayed with green (confirmed), red (not found), or black (server unreachable) indicators alongside mount status
+- `show_status` (`-st`) and `mount_share` / `unmount_share` now use `run_maybe_sudo` consistently, replacing ad-hoc sudo patterns throughout
 
 #### v3.1.1 — Bug Fix Release (2026-02-24)
 - Fixed `temp_file: unbound variable` crash under `set -euo pipefail` — `local`

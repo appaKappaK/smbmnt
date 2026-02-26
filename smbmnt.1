@@ -1,4 +1,4 @@
-.TH SMBMNT 1 "2025-02-24" "smbmnt 3.1.0" "User Commands"
+.TH SMBMNT 1 "2026-02-26" "smbmnt 3.2.0" "User Commands"
 .SH NAME
 smbmnt \- interactive SMB/CIFS share mount manager with network discovery
 .SH SYNOPSIS
@@ -57,6 +57,7 @@ Default is
 .IR /mnt .
 Mount points are named
 .IR /mnt/samba-<server>-<share> .
+Can also be set persistently via the saved configuration.
 .SS "Mount Operations"
 .TP
 .RI [ CHOICE ]
@@ -114,7 +115,10 @@ Display a dashboard showing currently mounted shares, server information, and
 system state.
 .TP
 .BR \-ls ", " \-\-list
-List the shares in the current configuration with their index numbers.
+List the shares in the current configuration with their index numbers, mount
+status, and live existence check against the server. Shares confirmed present
+on the server are marked green; shares not found are marked red; shares on an
+unreachable server are marked with a black indicator.
 .TP
 .B \-\-config
 Print the active configuration: server address, share list, config file
@@ -145,7 +149,7 @@ with mount, unmount, and fstab operations.
 Enable verbose diagnostic output to stderr. Equivalent to setting the
 environment variable
 .BR SMBMNT_DEBUG=true .
-Debug output is never written to the log file in production mode.
+Debug messages are also written to the log file when debug mode is active.
 .SS "Miscellaneous"
 .TP
 .BR \-h ", " \-\-help
@@ -274,6 +278,27 @@ Set to
 .B true
 to enable debug output. Equivalent to passing
 .BR \-\-debug .
+.TP
+.B SMBMNT_NO_SUDO
+Set to
+.B true
+to prevent
+.B smbmnt
+from ever invoking
+.BR sudo (8)
+or
+.BR doas (1),
+even when privilege escalation would otherwise be attempted.
+.TP
+.B SMBMNT_PREFER_SUDO
+Set to
+.B true
+to always attempt privilege escalation via
+.BR sudo (8)
+or
+.BR doas (1)
+even when the unprivileged attempt might succeed. Useful when the invoking
+user has passwordless sudo configured and wants consistent behaviour.
 .SH SECURITY
 Credentials files are validated for existence, correct ownership, and
 .B 600
