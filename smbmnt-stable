@@ -1125,6 +1125,58 @@ unmount_share() {
     return 1
 }
 
+mount_all_shares() {
+    local dry_run="${1:-false}"
+
+    log_message "INFO" "${BLUE}Mounting all shares...${NC}"
+
+    local success=0
+    local failed=0
+
+    for share in "${SHARES[@]}"; do
+        log_message "INFO" "${BLUE}Mounting $share...${NC}"
+
+        if mount_share "$share" "$dry_run"; then
+            success=$((success + 1))
+        else
+            failed=$((failed + 1))
+        fi
+    done
+
+    log_message "INFO" ""
+    log_message "INFO" "${CYAN}Summary:${NC}"
+    log_message "INFO" "  ${GREEN}Mounted: $success${NC}"
+    log_message "INFO" "  ${RED}Failed:  $failed${NC}"
+
+    [ "$failed" -eq 0 ]
+}
+
+unmount_all_shares() {
+    local dry_run="${1:-false}"
+
+    log_message "INFO" "${BLUE}Unmounting all shares...${NC}"
+
+    local success=0
+    local failed=0
+
+    for share in "${SHARES[@]}"; do
+        log_message "INFO" "${BLUE}Unmounting $share...${NC}"
+
+        if unmount_share "$share" "$dry_run"; then
+            success=$((success + 1))
+        else
+            failed=$((failed + 1))
+        fi
+    done
+
+    log_message "INFO" ""
+    log_message "INFO" "${CYAN}Summary:${NC}"
+    log_message "INFO" "  ${GREEN}Unmounted: $success${NC}"
+    log_message "INFO" "  ${RED}Failed:     $failed${NC}"
+
+    [ "$failed" -eq 0 ]
+}
+
 list_shares() {
     log_message "INFO" "${CYAN}Available shares on $SERVER:${NC}"
     log_message "INFO" "$(printf '=%.0s' {1..50})"
@@ -1291,20 +1343,24 @@ process_choices() {
         return 1
     fi
 
+    # Handle "all" using unified helpers
     if [[ "$choice" == "all" ]]; then
         log_message "INFO" "${BLUE}${action^}ing all shares...${NC}"
-        for share in "${SHARES[@]}"; do
-            if [ "$action" == "mount" ]; then
-                mount_share "$share" "$dry_run"
-            else
-                unmount_share "$share" "$dry_run"
-            fi
-        done
-    elif [[ "$choice" =~ ^[0-9,]+$ ]]; then
+        if [ "$action" == "mount" ]; then
+            mount_all_shares "$dry_run"
+        else
+            unmount_all_shares "$dry_run"
+        fi
+        return $?
+    fi
+
+    # Handle comma-separated numeric choices
+    if [[ "$choice" =~ ^[0-9,]+$ ]]; then
         IFS=',' read -ra CHOICES <<< "$choice"
         for ch in "${CHOICES[@]}"; do
             ch=$(echo "$ch" | tr -d ' ')
             local index=$((ch-1))
+
             if [ $index -ge 0 ] && [ $index -lt ${#SHARES[@]} ]; then
                 if [ "$action" == "mount" ]; then
                     mount_share "${SHARES[$index]}" "$dry_run"
@@ -1315,10 +1371,12 @@ process_choices() {
                 log_message "ERROR" "${RED}Invalid choice: $ch${NC}"
             fi
         done
-    else
-        log_message "ERROR" "${RED}Invalid choice: $choice${NC}"
-        return 1
+        return 0
     fi
+
+    # Invalid input
+    log_message "ERROR" "${RED}Invalid choice: $choice${NC}"
+    return 1
 }
 
 CREDENTIALS="$DEFAULT_CREDENTIALS"
