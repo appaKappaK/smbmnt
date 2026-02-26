@@ -3,7 +3,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="3.1.2"
+SCRIPT_VERSION="3.2.0"
 
 # $USER detection — resolve the real invoking user even under sudo
 if [ -n "${SUDO_USER:-}" ]; then
@@ -26,8 +26,11 @@ if [ ! -d "$ACTUAL_USER_HOME" ] || [ ! -r "$ACTUAL_USER_HOME" ]; then
 fi
 
 # Always use the real user's home directory for config — even under sudo
-REAL_USER="${SUDO_USER:-$USER}"
-REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
+REAL_USER="${SUDO_USER:-${USER:-$(whoami 2>/dev/null || echo root)}}"
+REAL_HOME="$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6 || true)"
+if [ -z "$REAL_HOME" ] || [ ! -d "$REAL_HOME" ]; then
+    REAL_HOME="$ACTUAL_USER_HOME"
+fi
 CONFIG_FILE="$REAL_HOME/.config/smbmnt/config"
 
 # defaults (pre config update)
@@ -43,7 +46,7 @@ CREDENTIALS="$DEFAULT_CREDENTIALS"
 # mount & SMBversion
 # SMB 3.1.1 is the most secure dialect; override with --smb-version if your server requires an older version (e.g. 2.1, 3.0).
 MOUNT_BASE="/mnt"
-SMB_VERSION="3.1.1"
+SMB_VERSION="3.2.0"
 
 # network config
 NETWORK_SCAN_PREFERENCE="" # 192...|10...|172...
@@ -154,7 +157,8 @@ validate_number() {
     local max="$2"
     local min="${3:-1}"
 
-    if [[ "$input" =~ [\`\;\|\&\(\)\<\>] ]]; then
+    # Must be a pure integer — reject anything non-numeric before arithmetic comparison
+    if ! [[ "$input" =~ ^[0-9]+$ ]]; then
         debug_log "Input '$input' is not a valid number"
         return 1
     fi
@@ -594,13 +598,21 @@ discover_servers() {
         log_message "ERROR" "${RED}Failed to create temp file${NC}"
         return 1
     }
-
-    # Try nmap normally, then via sudo if needed
-    if ! run_maybe_sudo nmap "${NMAP_OPTIONS[@]}" -oG - "$network" | grep "445/open/tcp" > "$temp_file"; then
+    local temp_raw; temp_raw=$(mktemp) || {
         rm -f "$temp_file"
+        log_message "ERROR" "${RED}Failed to create temp file${NC}"
+        return 1
+    }
+
+    # Separate nmap execution from grep so pipefail doesn't conflate
+    # "nmap failed" with "grep found no matches"
+    if ! run_maybe_sudo nmap "${NMAP_OPTIONS[@]}" -oG - "$network" > "$temp_raw" 2>/dev/null; then
+        rm -f "$temp_file" "$temp_raw"
         echo "⚠️  nmap failed even with sudo. Scan cannot continue."
         return 1
     fi
+    grep "445/open/tcp" "$temp_raw" > "$temp_file" || true
+    rm -f "$temp_raw"
 
     local servers=()
     while IFS= read -r line; do
@@ -823,7 +835,7 @@ generate_fstab() {
 
     for entry in "${fstab_entries[@]}"; do
         if ! grep -Fxq "$entry" /etc/fstab 2>/dev/null; then
-            if echo "$entry" | sudo tee -a /etc/fstab >/dev/null; then
+            if run_maybe_sudo tee -a /etc/fstab <<< "$entry" >/dev/null; then
                 log_message "INFO" "${GREEN}✓ Added to fstab: $entry${NC}"
                 added_count=$((added_count + 1))
             else
@@ -853,8 +865,7 @@ generate_fstab() {
 }
 
 show_status() {
-    log_message "INFO" "${PURPLE}"
-    log_message "INFO" " ╔═══════════════════════════════════════════════════════════════════════╗"
+    log_message "INFO" "${PURPLE} ╔═══════════════════════════════════════════════════════════════════════╗"
     log_message "INFO" " ║                        SMB Mount Status                               ║"
     log_message "INFO" " ╚═══════════════════════════════════════════════════════════════════════╝${NC}"
 
@@ -873,7 +884,7 @@ show_status() {
             local server_info
             server_info=$(grep " $mount_point " /proc/mounts 2>/dev/null | sed 's/.*\/\/\([^/]*\)\/.*/\1/' || true)
             local size
-            size=$(df -h "$mount_point" 2>/dev/null | tail -n1 | awk '{print $2}')
+            size=$(df -hP "$mount_point" 2>/dev/null | awk 'NR==2 {print $2}')
             printf "%-20s %-25s %-15s %-10s\n" "$share" "$mount_point" "$server_info" "${size:-N/A}"
             mounted_count=$((mounted_count + 1))
         fi
@@ -1025,6 +1036,20 @@ mount_share() {
     if [ ${#mount_point} -ge 4096 ]; then
         log_message "ERROR" "${RED}Mount point path too long: $mount_point${NC}"
         return 1
+    fi
+
+    # Require mount.cifs — mount exists on all systems but CIFS support may not
+    if ! require_dependency "mount.cifs" "Install cifs-utils: apt-get install cifs-utils / dnf install cifs-utils"; then
+        return 1
+    fi
+
+    # Warn if credentials file has overly permissive permissions
+    if [ -f "$CREDENTIALS" ]; then
+        local cred_perms
+        cred_perms=$(stat -c '%a' "$CREDENTIALS" 2>/dev/null || true)
+        if [ -n "$cred_perms" ] && [ "$cred_perms" != "600" ] && [ "$cred_perms" -gt 600 ] 2>/dev/null; then
+            log_message "WARNING" "${YELLOW}Credentials file has insecure permissions ($cred_perms) — recommend chmod 600 $CREDENTIALS${NC}"
+        fi
     fi
 
     # DRY RUN
@@ -1306,7 +1331,7 @@ list_shares() {
             status="${GREEN}● MOUNTED${NC}"
 
             # Free space
-            if size_info=$(df -h "$mount_point" 2>/dev/null | awk 'NR==2 {print "(" $4 " free)"}'); then
+            if size_info=$(df -hP "$mount_point" 2>/dev/null | awk 'NR==2 {print "(" $4 " free)"}'); then
                 status="$status ${CYAN}$size_info${NC}"
             fi
 
@@ -1497,6 +1522,10 @@ main() {
                 ;;
             --smb-version)
                 if [[ -n "${2:-}" ]] && [[ ! "${2}" =~ ^- ]]; then
+                    if ! [[ "${2}" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+                        log_message "ERROR" "${RED}Invalid SMB version format: '${2}' (expected e.g. 2.1, 3.0, 3.1.1)${NC}"
+                        exit 1
+                    fi
                     SMB_VERSION="${2}"
                     shift
                 else
