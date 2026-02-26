@@ -147,7 +147,7 @@ validate_number() {
     local max="$2"
     local min="${3:-1}"
 
-    if [[ ! "$input" =~ ^[0-9]+$ ]]; then
+    if [[ "$input" =~ [\`\;\|\&\(\)\<\>] ]]; then
         debug_log "Input '$input' is not a valid number"
         return 1
     fi
@@ -203,6 +203,67 @@ if ! require_dependency "mountpoint" "Install util-linux (mountpoint is part of 
     log_message "ERROR" "${RED}Cannot continue without mountpoint${NC}"
     exit 1
 fi
+
+run_maybe_sudo() {
+    local cmd=("$@")
+
+    # 1) Global override: never use sudo/doas
+    if [ "${SMBMNT_NO_SUDO:-false}" = true ]; then
+        debug_log "NO_SUDO=true → running without escalation: ${cmd[*]}"
+        "${cmd[@]}"
+        return $?
+    fi
+
+    # 2) Already root → no escalation needed
+    if [ "$(id -u)" -eq 0 ]; then
+        debug_log "Running as root → ${cmd[*]}"
+        "${cmd[@]}"
+        return $?
+    fi
+
+    # 3) Optional: prefer sudo/doas even if unprivileged works
+    if [ "${SMBMNT_PREFER_SUDO:-false}" = true ]; then
+        if command -v sudo >/dev/null && sudo -n true 2>/dev/null; then
+            debug_log "PREFER_SUDO=true → sudo ${cmd[*]}"
+            sudo "${cmd[@]}"
+            return $?
+        fi
+        if command -v doas >/dev/null; then
+            debug_log "PREFER_SUDO=true → doas ${cmd[*]}"
+            doas "${cmd[@]}"
+            return $?
+        fi
+        debug_log "PREFER_SUDO=true but no sudo/doas available → falling back"
+    fi
+
+    # 4) Try without sudo first
+    debug_log "Trying without sudo: ${cmd[*]}"
+    if "${cmd[@]}" 2>/dev/null; then
+        return 0
+    fi
+
+    # 5) Try sudo if available and passwordless
+    if command -v sudo >/dev/null; then
+        if sudo -n true 2>/dev/null; then
+            debug_log "Trying with sudo: ${cmd[*]}"
+            sudo "${cmd[@]}"
+            return $?
+        else
+            debug_log "sudo exists but is not passwordless"
+        fi
+    fi
+
+    # 6) Try doas if available
+    if command -v doas >/dev/null; then
+        debug_log "Trying with doas: ${cmd[*]}"
+        doas "${cmd[@]}"
+        return $?
+    fi
+
+    # 7) No escalation path succeeded
+    debug_log "Privilege escalation unavailable → command failed: ${cmd[*]}"
+    return 1
+}
 
 show_usage() {
     echo "Usage: smbmnt [OPTIONS] [CHOICE]"
@@ -495,7 +556,6 @@ discover_servers() {
     local network
     local raw_network="$1"
 
-    # Validate the network argument — only digits, dots, and slash are valid
     if [[ -n "$raw_network" ]] && [[ ! "$raw_network" =~ ^[0-9./]+$ ]]; then
         log_message "ERROR" "${RED}Invalid network argument: '$raw_network'${NC}"
         return 1
@@ -508,7 +568,6 @@ discover_servers() {
         fi
     fi
 
-    # nmap is only required for network scanning — enforce it here
     if ! require_dependency "nmap" "Install nmap: apt-get install nmap / dnf install nmap"; then
         return 1
     fi
@@ -522,41 +581,12 @@ discover_servers() {
     }
     trap 'rm -f "${temp_file:-}"' EXIT
 
-    #
-    # 1) Try nmap normally first
-    #
-    if ! nmap "${NMAP_OPTIONS[@]}" -oG - "$network" 2>/dev/null | grep "445/open/tcp" > "$temp_file"; then
-
-        #
-        # 2) Normal nmap failed → check sudo availability
-        #
-
-        # sudo not installed
-        if ! command -v sudo >/dev/null; then
-            echo "⚠️  This system requires sudo for nmap, but sudo is not installed."
-            echo "   Try installing sudo or run the scan manually with root privileges."
-            return 1
-        fi
-
-        # sudo installed but cannot run without password
-        if ! sudo -n true 2>/dev/null; then
-            echo "⚠️  This system requires sudo for nmap, but a password prompt is not allowed in this mode."
-            echo "   Try running: sudo smbmnt -S"
-            return 1
-        fi
-
-        #
-        # 3) sudo is available and passwordless → run sudo nmap
-        #
-        if ! sudo nmap "${NMAP_OPTIONS[@]}" -oG - "$network" 2>/dev/null | grep "445/open/tcp" > "$temp_file"; then
-            echo "⚠️  nmap failed even with sudo. Scan cannot continue."
-            return 1
-        fi
+    # Try nmap normally, then via sudo if needed
+    if ! run_maybe_sudo nmap "${NMAP_OPTIONS[@]}" -oG - "$network" | grep "445/open/tcp" > "$temp_file"; then
+        echo "⚠️  nmap failed even with sudo. Scan cannot continue."
+        return 1
     fi
 
-    #
-    # 4) Parse discovered servers
-    #
     local servers=()
     while IFS= read -r line; do
         local ip
@@ -571,9 +601,6 @@ discover_servers() {
 
     echo "Found ${#servers[@]} SMB server(s)"
 
-    #
-    # 5) Cache handling
-    #
     if [ -s "$DISCOVERED_SERVERS_FILE" ]; then
         read -r -p "Refresh discovered servers cache? (y/N): " refresh_choice
         if [[ "$refresh_choice" =~ ^[Yy]$ ]]; then
@@ -584,9 +611,6 @@ discover_servers() {
         fi
     fi
 
-    #
-    # 6) Reverse DNS lookup for each server
-    #
     for i in "${!servers[@]}"; do
         local ip="${servers[$i]}"
         local hostname=""
@@ -614,9 +638,7 @@ discover_servers() {
 }
 
 scan_shares() {
-    local server_ip
-    # Accept the server arg; validate_server below will reject anything malformed
-    server_ip="$1"
+    local server_ip="$1"
 
     if [ -z "$server_ip" ]; then
         log_message "ERROR" "${RED}Server IP required${NC}"
@@ -627,24 +649,39 @@ scan_shares() {
 
     log_message "INFO" "${BLUE}Scanning shares on $server_ip...${NC}"
 
-    # smbclient is only required for share enumeration — enforce it here, not at startup
+    # smbclient is only required for share enumeration — enforce it here
     if ! require_dependency "smbclient" "apt-get install smbclient / dnf install samba-client / pacman -S smbclient"; then
         return 1
     fi
 
-    local shares_output
-    if ! shares_output=$(smbclient -L "$server_ip" -N 2>/dev/null); then
-        if [ -f "$CREDENTIALS" ]; then
-            if ! shares_output=$(smbclient -L "$server_ip" -A "$CREDENTIALS" 2>/dev/null); then
-                log_message "ERROR" "${RED}Could not connect to $server_ip${NC}"
+    local shares_output=""
+
+    #
+    # 1) Try credentialed access first (modern SMB servers)
+    #
+    if [ -f "$CREDENTIALS" ]; then
+        if ! shares_output=$(run_maybe_sudo smbclient -L "$server_ip" -A "$CREDENTIALS" 2>/dev/null); then
+            # 2) Credentials failed → try guest
+            if ! shares_output=$(run_maybe_sudo smbclient -L "$server_ip" -N 2>/dev/null); then
+                echo "⚠️  smbclient failed even with sudo. Cannot scan shares."
                 return 1
             fi
-        else
-            log_message "ERROR" "${RED}Could not connect to $server_ip${NC}"
+        fi
+
+    else
+        #
+        # No credentials file → try guest first
+        #
+        if ! shares_output=$(run_maybe_sudo smbclient -L "$server_ip" -N 2>/dev/null); then
+            echo "⚠️  smbclient failed even with sudo. Cannot scan shares."
+            echo "   Create a credentials file or run: sudo smbmnt -Ss $server_ip"
             return 1
         fi
     fi
 
+    #
+    # 3) Parse shares
+    #
     local shares
     mapfile -t shares < <(echo "$shares_output" | \
         grep "Disk" | \
@@ -669,7 +706,6 @@ scan_shares() {
     if [[ "$auto_config" =~ ^[Yy]$ ]]; then
         if update_script_config "$server_ip" "${shares[@]}"; then
             log_message "INFO" "${CYAN}Run 'smbmnt' to mount shares${NC}"
-            # Return instead of exit so callers can handle the result
             return 0
         fi
     fi
@@ -960,18 +996,19 @@ mount_share() {
     local mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_name,,}"
     local share_path="//$SERVER/$share_name"
 
-    # Validate share name strictly — only alphanumerics, hyphens, and underscores allowed
+    # Validate share name
     if [[ ! "$share_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
         log_message "ERROR" "${RED}Invalid share name: $share_name${NC}"
         return 1
     fi
 
-    # Guard against excessively long mount point paths (Linux limit: 4096)
+    # Guard against absurdly long paths
     if [ ${#mount_point} -ge 4096 ]; then
         log_message "ERROR" "${RED}Mount point path too long: $mount_point${NC}"
         return 1
     fi
 
+    # DRY RUN
     if [ "$dry_run" = true ]; then
         log_message "INFO" "${CYAN}🚫 DRY RUN: Would mount share:${NC}"
         log_message "INFO" "${CYAN}  📁 Share: $share_name${NC}"
@@ -979,51 +1016,51 @@ mount_share() {
         log_message "INFO" "${CYAN}  🔗 Source: $share_path${NC}"
         log_message "INFO" "${CYAN}  👤 Options: credentials=$CREDENTIALS,uid=$(id -u),gid=$(id -g),vers=$SMB_VERSION${NC}"
 
-        if mountpoint -q "$mount_point" 2>/dev/null; then
-            log_message "INFO" "${CYAN}  ℹ️  Note: Share is already mounted${NC}"
-        fi
-
-        if [ ! -d "$mount_point" ]; then
-            log_message "INFO" "${CYAN}  📂 Would create directory: $mount_point${NC}"
-        fi
-
+        mountpoint -q "$mount_point" && log_message "INFO" "${CYAN}  ℹ️  Already mounted${NC}"
+        [ ! -d "$mount_point" ] && log_message "INFO" "${CYAN}  📂 Would create directory: $mount_point${NC}"
         return 0
     fi
 
-    if mountpoint -q "$mount_point" 2>/dev/null; then
+    # Already mounted?
+    if mountpoint -q "$mount_point"; then
         log_message "INFO" "${GREEN}$share_name already mounted at $mount_point${NC}"
         return 0
     fi
 
+    # Ensure mount directory exists
     if [ ! -d "$mount_point" ]; then
         debug_log "Creating mount directory: $mount_point"
-        # Warn early if we likely lack permission and sudo isn't available passwordlessly
-        if [ ! -w "$MOUNT_BASE" ] && ! sudo -n true 2>/dev/null; then
-            log_message "WARNING" "${YELLOW}May need sudo password to create mount point under $MOUNT_BASE${NC}"
+
+        if ! mkdir -p "$mount_point" 2>/dev/null; then
+            if ! run_maybe_sudo mkdir -p "$mount_point"; then
+                log_message "ERROR" "${RED}Failed to create mount directory: $mount_point${NC}"
+                return 1
+            fi
         fi
-        if ! sudo mkdir -p "$mount_point" 2>/dev/null; then
-            log_message "ERROR" "${RED}Failed to create mount directory: $mount_point${NC}"
-            return 1
-        fi
-        if ! sudo chown "$ACTUAL_USER:$ACTUAL_USER" "$mount_point" 2>/dev/null; then
-            log_message "ERROR" "${RED}Failed to set ownership for mount directory: $mount_point${NC}"
-            sudo rmdir "$mount_point" 2>/dev/null
-            return 1
-        fi
+
+        run_maybe_sudo chown "$ACTUAL_USER:$ACTUAL_USER" "$mount_point" 2>/dev/null || true
     fi
+
+    # Mount options
+    local mount_options="credentials=$CREDENTIALS,uid=$(id -u),gid=$(id -g),file_mode=0664,dir_mode=0775,vers=$SMB_VERSION,noexec"
 
     log_message "INFO" "${BLUE}Mounting $share_name...${NC}"
 
-    local mount_options
-    mount_options="credentials=$CREDENTIALS,uid=$(id -u),gid=$(id -g),file_mode=0664,dir_mode=0775,vers=$SMB_VERSION,noexec"
-    if sudo mount -t cifs "$share_path" "$mount_point" -o "$mount_options" 2>>"$LOG_FILE"; then
+    # Try mount without sudo
+    if mount -t cifs "$share_path" "$mount_point" -o "$mount_options" 2>>"$LOG_FILE"; then
         log_message "INFO" "${GREEN}$share_name mounted successfully at $mount_point${NC}"
         return 0
-    else
-        log_message "ERROR" "${RED}Mount failed for $share_name${NC}"
-        sudo rmdir "$mount_point" 2>/dev/null
-        return 1
     fi
+
+    # Try mount with sudo/doas
+    if run_maybe_sudo mount -t cifs "$share_path" "$mount_point" -o "$mount_options" 2>>"$LOG_FILE"; then
+        log_message "INFO" "${GREEN}$share_name mounted successfully at $mount_point (sudo)${NC}"
+        return 0
+    fi
+
+    log_message "ERROR" "${RED}Mount failed for $share_name${NC}"
+    run_maybe_sudo rmdir "$mount_point" 2>/dev/null
+    return 1
 }
 
 unmount_share() {
@@ -1036,17 +1073,16 @@ unmount_share() {
         return 1
     fi
 
+    # DRY RUN
     if [ "$dry_run" = true ]; then
         log_message "INFO" "${CYAN}🚫 DRY RUN: Would unmount share:${NC}"
         log_message "INFO" "${CYAN}  📁 Share: $share_name${NC}"
         log_message "INFO" "${CYAN}  📍 Mount point: $mount_point${NC}"
 
-        if mountpoint -q "$mount_point" 2>/dev/null; then
+        if mountpoint -q "$mount_point"; then
             log_message "INFO" "${CYAN}  ✅ Currently mounted - would unmount${NC}"
-
-            if lsof "$mount_point" &>/dev/null; then
+            command -v lsof &>/dev/null && lsof "$mount_point" &>/dev/null && \
                 log_message "INFO" "${CYAN}  ⚠️  Warning: Mount point may be busy${NC}"
-            fi
         else
             log_message "INFO" "${CYAN}  ℹ️  Not currently mounted${NC}"
         fi
@@ -1055,59 +1091,178 @@ unmount_share() {
         return 0
     fi
 
-    if mountpoint -q "$mount_point" 2>/dev/null; then
-        log_message "INFO" "${BLUE}Unmounting $share_name...${NC}"
-
-        if sudo umount "$mount_point" 2>>"$LOG_FILE"; then
-            log_message "INFO" "${GREEN}$share_name unmounted successfully${NC}"
-
-            sudo rmdir "$mount_point" 2>/dev/null && \
-                debug_log "Removed mount directory: $mount_point"
-
-        else
-            log_message "ERROR" "${RED}Unmount failed for $share_name${NC}"
-            # Avoid dmesg — restricted on modern systems and unreliable.
-            # Use lsof to check for open files on the mount point instead.
-            if command -v lsof &>/dev/null && lsof "$mount_point" &>/dev/null; then
-                log_message "INFO" "${YELLOW}Share is busy — close open files/folders and retry${NC}"
-            else
-                log_message "INFO" "${YELLOW}Unmount failed — the share may be in use or the connection was lost${NC}"
-            fi
-            return 1
-        fi
-    else
+    # Not mounted?
+    if ! mountpoint -q "$mount_point"; then
         log_message "INFO" "${YELLOW}$share_name is not mounted${NC}"
+        return 0
     fi
 
-    return 0
+    log_message "INFO" "${BLUE}Unmounting $share_name...${NC}"
+
+    # Try unmount without sudo
+    if umount "$mount_point" 2>>"$LOG_FILE"; then
+        log_message "INFO" "${GREEN}$share_name unmounted successfully${NC}"
+        rmdir "$mount_point" 2>/dev/null || true
+        return 0
+    fi
+
+    # Try unmount with sudo/doas
+    if run_maybe_sudo umount "$mount_point" 2>>"$LOG_FILE"; then
+        log_message "INFO" "${GREEN}$share_name unmounted successfully (sudo)${NC}"
+        run_maybe_sudo rmdir "$mount_point" 2>/dev/null || true
+        return 0
+    fi
+
+    # Still mounted → likely busy
+    log_message "ERROR" "${RED}Unmount failed for $share_name${NC}"
+
+    if command -v lsof &>/dev/null && lsof "$mount_point" &>/dev/null; then
+        log_message "INFO" "${YELLOW}Share is busy — close open files/folders and retry${NC}"
+    else
+        log_message "INFO" "${YELLOW}Unmount failed — the share may be in use or the connection was lost${NC}"
+    fi
+
+    return 1
 }
 
 list_shares() {
     log_message "INFO" "${CYAN}Available shares on $SERVER:${NC}"
     log_message "INFO" "$(printf '=%.0s' {1..50})"
 
+    #
+    # 1) Server reachability check
+    #
+    local reachable=true
+    local dns_ok=true
+
+    # DNS check if hostname
+    if [[ "$SERVER" =~ [a-zA-Z] ]]; then
+        if ! getent hosts "$SERVER" >/dev/null 2>&1; then
+            dns_ok=false
+        fi
+    fi
+
+    # Ping check (fast)
+    if ! ping -c 1 -W 1 "$SERVER" >/dev/null 2>&1; then
+        reachable=false
+    fi
+
+    #
+    # 2) Print reachability status
+    #
+    if [ "$dns_ok" = false ]; then
+        log_message "INFO" "${YELLOW}⚠️  DNS lookup failed for $SERVER${NC}"
+    fi
+
+    if [ "$reachable" = true ]; then
+        log_message "INFO" "${GREEN}✓ Server reachable${NC}"
+    else
+        log_message "INFO" "${RED}✗ Server unreachable${NC}"
+    fi
+
+    log_message "INFO" ""
+
+    #
+    # 3) Query server for actual share list (credentials-first, adaptive sudo)
+    #
+    local server_shares_output=""
+    local -a server_shares=()
+
+    # Try credentials first
+    if [ -f "$CREDENTIALS" ]; then
+        server_shares_output=$(smbclient -L "$SERVER" -A "$CREDENTIALS" 2>/dev/null || true)
+        if [ -z "$server_shares_output" ]; then
+            # Try guest
+            server_shares_output=$(smbclient -L "$SERVER" -N 2>/dev/null || true)
+        fi
+    else
+        # No credentials → try guest
+        server_shares_output=$(smbclient -L "$SERVER" -N 2>/dev/null || true)
+    fi
+
+    # If both failed → adaptive sudo
+    if [ -z "$server_shares_output" ]; then
+        if command -v sudo >/dev/null && sudo -n true 2>/dev/null; then
+            if [ -f "$CREDENTIALS" ]; then
+                server_shares_output=$(sudo smbclient -L "$SERVER" -A "$CREDENTIALS" 2>/dev/null || true)
+            fi
+            if [ -z "$server_shares_output" ]; then
+                server_shares_output=$(sudo smbclient -L "$SERVER" -N 2>/dev/null || true)
+            fi
+        fi
+    fi
+
+    # Parse server share list
+    if [ -n "$server_shares_output" ]; then
+        mapfile -t server_shares < <(echo "$server_shares_output" | \
+            grep "Disk" | awk '{print $1}' | grep -v "^$" | grep -v "IPC\$" | grep -v "print\$" | grep -v "nobody")
+    fi
+
+    #
+    # 4) List shares with mount + existence + permission status
+    #
     local mounted_count=0
     local total_count=${#SHARES[@]}
 
     for i in "${!SHARES[@]}"; do
         local share="${SHARES[$i]}"
-        local mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share,,}"
+        local mount_point
+        mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share,,}"
         local status=""
         local size_info=""
+        local warn_dir=""
+        local exists_icon=""
+        local exists_color=""
 
+        #
+        # Determine existence / permission status
+        #
+        if printf '%s\n' "${server_shares[@]}" | grep -Fxq "$share"; then
+            exists_icon="🟢"
+            exists_color="${GREEN}"
+        else
+            # If server unreachable → unknown
+            if [ "$reachable" = false ]; then
+                exists_icon="⚫"
+                exists_color="${YELLOW}"
+            else
+                exists_icon="🔴"
+                exists_color="${RED}"
+            fi
+        fi
+
+        #
+        # Mounted?
+        #
         if mountpoint -q "$mount_point" 2>/dev/null; then
             status="${GREEN}● MOUNTED${NC}"
+
+            # Free space
             if size_info=$(df -h "$mount_point" 2>/dev/null | awk 'NR==2 {print "(" $4 " free)"}'); then
                 status="$status ${CYAN}$size_info${NC}"
             fi
+
             mounted_count=$((mounted_count + 1))
         else
             status="${YELLOW}○ UNMOUNTED${NC}"
         fi
 
-        log_message "INFO" "$((i+1))) $share $status"
+        #
+        # Warn if directory exists but not mounted
+        #
+        if [ -d "$mount_point" ] && ! mountpoint -q "$mount_point"; then
+            warn_dir="${YELLOW}(dir exists)${NC}"
+        fi
+
+        #
+        # Print line
+        #
+        log_message "INFO" "$((i+1))) $share  $status  ${BLUE}$mount_point${NC}  ${exists_color}${exists_icon}${NC} $warn_dir"
     done
 
+    #
+    # 5) Summary
+    #
     local summary_color="$GREEN"
     if [ "$mounted_count" -eq 0 ]; then
         summary_color="$YELLOW"
@@ -1117,6 +1272,13 @@ list_shares() {
 
     log_message "INFO" ""
     log_message "INFO" "${summary_color}Summary: $mounted_count/$total_count shares mounted${NC}"
+
+    #
+    # 6) Extra hint if server unreachable
+    #
+    if [ "$reachable" = false ]; then
+        log_message "INFO" "${RED}Note:${NC} Server appears offline — share existence cannot be verified."
+    fi
 }
 
 process_choices() {
