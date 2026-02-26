@@ -5,37 +5,26 @@ IFS=$'\n\t'
 
 SCRIPT_VERSION="3.2.1"
 
-# $USER detection — resolve the real invoking user even under sudo
-if [ -n "${SUDO_USER:-}" ]; then
-    ACTUAL_USER="$SUDO_USER"
-    ACTUAL_USER_HOME=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
-    ACTUAL_USER_HOME="${ACTUAL_USER_HOME:-$HOME}"
-elif [ -n "${USER:-}" ]; then
-    ACTUAL_USER="$USER"
-    ACTUAL_USER_HOME=$(getent passwd "$USER" 2>/dev/null | cut -d: -f6)
-    ACTUAL_USER_HOME="${ACTUAL_USER_HOME:-$HOME}"
-else
-    ACTUAL_USER="$(whoami 2>/dev/null || echo root)"
-    ACTUAL_USER_HOME="$HOME"
-fi
-
-# validate home directory
-if [ ! -d "$ACTUAL_USER_HOME" ] || [ ! -r "$ACTUAL_USER_HOME" ]; then
-    echo "Error: Could not determine valid home directory: '$ACTUAL_USER_HOME'"
-    exit 1
-fi
-
-# Always use the real user's home directory for config — even under sudo
+# Resolve the real invoking user even under sudo — single source of truth.
+# ACTUAL_USER/ACTUAL_USER_HOME were previously duplicated by REAL_USER/REAL_HOME;
+# consolidated here to avoid divergence.
 REAL_USER="${SUDO_USER:-${USER:-$(whoami 2>/dev/null || echo root)}}"
 REAL_HOME="$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6 || true)"
 if [ -z "$REAL_HOME" ] || [ ! -d "$REAL_HOME" ]; then
-    REAL_HOME="$ACTUAL_USER_HOME"
+    REAL_HOME="${HOME:-/root}"
 fi
+
+# validate home directory
+if [ ! -d "$REAL_HOME" ] || [ ! -r "$REAL_HOME" ]; then
+    echo "Error: Could not determine valid home directory: '$REAL_HOME'"
+    exit 1
+fi
+
 CONFIG_FILE="$REAL_HOME/.config/smbmnt/config"
 
 # defaults (pre config update)
 DEFAULT_SERVER="YourSambaIP"
-DEFAULT_CREDENTIALS="$ACTUAL_USER_HOME/.smbcredentials"
+DEFAULT_CREDENTIALS="$REAL_HOME/.smbcredentials"
 DEFAULT_SHARES=("ShareName")
 
 # runtime vars
@@ -53,7 +42,7 @@ NETWORK_SCAN_PREFERENCE="" # 192...|10...|172...
 NMAP_OPTIONS=(-Pn -n -p 445 --open --min-rate 1000)
 
 # paths
-CACHE_DIR="$ACTUAL_USER_HOME/.cache/smbmnt"
+CACHE_DIR="$REAL_HOME/.cache/smbmnt"
 LOG_FILE="$CACHE_DIR/smbmnt.log"
 DISCOVERED_SERVERS_FILE="$CACHE_DIR/discovered_servers"
 
@@ -69,6 +58,20 @@ NC='\033[0m'
 
 mkdir -p "$CACHE_DIR"
 touch "$LOG_FILE" 2>/dev/null && chmod 644 "$LOG_FILE" 2>/dev/null
+
+# Global cleanup trap — removes any temp files created during the run on
+# exit, interrupt (Ctrl+C), or termination signal.
+# Individual functions declare their own temp vars; this catches anything
+# that didn't get cleaned up via a local trap.
+_SMBMNT_TMPFILES=()
+_smbmnt_cleanup() {
+    # ${array[@]+"${array[@]}"} is the correct set -u safe expansion for arrays —
+    # bare ${array[@]:-} does not work reliably for empty arrays in all bash versions.
+    for f in ${_SMBMNT_TMPFILES[@]+"${_SMBMNT_TMPFILES[@]}"}; do
+        rm -f "$f" 2>/dev/null
+    done
+}
+trap '_smbmnt_cleanup' EXIT INT TERM
 
 # Strip ANSI color codes from a string for clean log output
 strip_ansi() {
@@ -256,18 +259,11 @@ run_maybe_sudo() {
         return 0
     fi
 
-    # 5) Try sudo — passwordless first (non-interactive), then interactive prompt
+    # 5) Try sudo — passwordless or interactive, both invoke the same way
     if command -v sudo >/dev/null; then
-        if sudo -n true 2>/dev/null; then
-            debug_log "Trying with sudo (passwordless): $cmd_display"
-            sudo "${cmd[@]}"
-            return $?
-        else
-            # sudo requires a password — allow interactive prompt
-            debug_log "Trying with sudo (interactive): $cmd_display"
-            sudo "${cmd[@]}"
-            return $?
-        fi
+        debug_log "Trying with sudo: $cmd_display"
+        sudo "${cmd[@]}"
+        return $?
     fi
 
     # 6) Try doas if available
@@ -304,6 +300,11 @@ show_usage() {
     echo "  --dry-run                 Preview actions without executing"
     echo "  --version                 Show version"
     echo "  -h, --help                Show this help"
+    echo ""
+    echo "ENVIRONMENT:"
+    echo "  SMBMNT_DEBUG=true         Enable debug output (same as --debug)"
+    echo "  SMBMNT_NO_SUDO=true       Never use sudo/doas, even if escalation would help"
+    echo "  SMBMNT_PREFER_SUDO=true   Always escalate via sudo/doas even if not strictly needed"
     echo ""
     echo "CHOICE:"
     echo "  1-N               Specific share number"
@@ -445,6 +446,15 @@ save_config() {
         fi
     fi
 
+    # Write to a temp file first, then atomically move into place —
+    # prevents a truncated config if the write is interrupted mid-way.
+    local config_tmp
+    config_tmp=$(mktemp "${config_dir}/.smbmnt-config-XXXXXX") || {
+        log_message "ERROR" "${RED}Failed to create temp file for config write${NC}"
+        return 1
+    }
+    _SMBMNT_TMPFILES+=("$config_tmp")
+
     if ! {
         echo "# SMB Mount Manager Configuration"
         echo "# Generated on $(date)"
@@ -454,19 +464,19 @@ save_config() {
         printf 'SHARES=('
         printf '"%s" ' "${shares[@]}"
         printf ')\n'
-
-
-    } > "$CONFIG_FILE" 2>/dev/null; then
+    } > "$config_tmp" 2>/dev/null; then
         log_message "ERROR" "${RED}Failed to write config file${NC}"
+        rm -f "$config_tmp"
         if [ -f "${CONFIG_FILE}.backup" ]; then
             mv "${CONFIG_FILE}.backup" "$CONFIG_FILE" 2>/dev/null
         fi
         return 1
     fi
 
-    # Verify the file is parseable by our own loader before committing
-    if ! grep -qE '^SERVER="[^"]+"' "$CONFIG_FILE"; then
+    # Verify the temp file is parseable before committing
+    if ! grep -qE '^SERVER="[^"]+"' "$config_tmp"; then
         log_message "ERROR" "${RED}Generated configuration failed validation${NC}"
+        rm -f "$config_tmp"
         if [ -f "${CONFIG_FILE}.backup" ]; then
             mv "${CONFIG_FILE}.backup" "$CONFIG_FILE"
             log_message "INFO" "${YELLOW}Restored previous configuration${NC}"
@@ -474,7 +484,12 @@ save_config() {
         return 1
     fi
 
-    chmod 600 "$CONFIG_FILE" 2>/dev/null
+    chmod 600 "$config_tmp" 2>/dev/null
+    if ! mv "$config_tmp" "$CONFIG_FILE" 2>/dev/null; then
+        log_message "ERROR" "${RED}Failed to move config into place${NC}"
+        rm -f "$config_tmp"
+        return 1
+    fi
 
     log_message "INFO" "${GREEN}✓ Configuration saved to $CONFIG_FILE${NC}"
 
@@ -603,6 +618,7 @@ discover_servers() {
         log_message "ERROR" "${RED}Failed to create temp file${NC}"
         return 1
     }
+    _SMBMNT_TMPFILES+=("$temp_file" "$temp_raw")
 
     # Separate nmap execution from grep so pipefail doesn't conflate
     # "nmap failed" with "grep found no matches"
@@ -639,6 +655,7 @@ discover_servers() {
         fi
     fi
 
+    local cache_lines=()
     for i in "${!servers[@]}"; do
         local ip="${servers[$i]}"
         local hostname=""
@@ -652,12 +669,15 @@ discover_servers() {
 
         if [ -n "$hostname" ]; then
             echo "$((i+1))) $ip ($hostname)"
-            echo "$ip:$hostname" >> "$DISCOVERED_SERVERS_FILE"
+            cache_lines+=("$ip:$hostname")
         else
             echo "$((i+1))) $ip"
-            echo "$ip:" >> "$DISCOVERED_SERVERS_FILE"
+            cache_lines+=("$ip:")
         fi
     done
+
+    # Batch-write all entries in a single file open rather than one >> per iteration
+    printf '%s\n' "${cache_lines[@]}" >> "$DISCOVERED_SERVERS_FILE"
 
     sort -u -o "$DISCOVERED_SERVERS_FILE" "$DISCOVERED_SERVERS_FILE"
 
@@ -835,11 +855,24 @@ generate_fstab() {
 
     for entry in "${fstab_entries[@]}"; do
         if ! grep -Fxq "$entry" /etc/fstab 2>/dev/null; then
-            if run_maybe_sudo tee -a /etc/fstab <<< "$entry" >/dev/null; then
+            # Atomic fstab update: copy → append → validate → mv into place
+            # Avoids leaving fstab in a corrupt state if something goes wrong mid-write
+            local fstab_tmp
+            fstab_tmp=$(mktemp) || {
+                log_message "ERROR" "${RED}✗ Failed to create temp file for fstab update${NC}"
+                error_count=$((error_count + 1))
+                continue
+            }
+            _SMBMNT_TMPFILES+=("$fstab_tmp")
+            if run_maybe_sudo cp /etc/fstab "$fstab_tmp" && \
+               echo "$entry" | run_maybe_sudo tee -a "$fstab_tmp" >/dev/null && \
+               run_maybe_sudo mount -a --fake -T "$fstab_tmp" 2>/dev/null && \
+               run_maybe_sudo mv "$fstab_tmp" /etc/fstab; then
                 log_message "INFO" "${GREEN}✓ Added to fstab: $entry${NC}"
                 added_count=$((added_count + 1))
             else
-                log_message "ERROR" "${RED}✗ Failed to add to fstab: $entry${NC}"
+                log_message "ERROR" "${RED}✗ Failed to add to fstab (validation failed, original unchanged): $entry${NC}"
+                rm -f "$fstab_tmp"
                 error_count=$((error_count + 1))
             fi
         else
@@ -1043,12 +1076,19 @@ mount_share() {
         return 1
     fi
 
-    # Warn if credentials file has overly permissive permissions
+    # Warn if credentials file has group or other read/write bits set.
+    # stat -c '%a' gives octal perms as a decimal string; we convert to check
+    # bits 0o044 (group-read + other-read) and 0o022 (group-write + other-write).
     if [ -f "$CREDENTIALS" ]; then
-        local cred_perms
-        cred_perms=$(stat -c '%a' "$CREDENTIALS" 2>/dev/null || true)
-        if [ -n "$cred_perms" ] && [ "$cred_perms" != "600" ] && [ "$cred_perms" -gt 600 ] 2>/dev/null; then
-            log_message "WARNING" "${YELLOW}Credentials file has insecure permissions ($cred_perms) — recommend chmod 600 $CREDENTIALS${NC}"
+        local cred_perms_oct
+        cred_perms_oct=$(stat -c '%a' "$CREDENTIALS" 2>/dev/null || true)
+        if [ -n "$cred_perms_oct" ]; then
+            # Convert octal string to decimal for arithmetic comparison
+            local cred_perms_dec=$(( 8#$cred_perms_oct ))
+            # Check group-read(0o040), group-write(0o020), other-read(0o004), other-write(0o002)
+            if (( (cred_perms_dec & 0x3E) != 0 )); then
+                log_message "WARNING" "${YELLOW}Credentials file has insecure permissions ($cred_perms_oct) — recommend chmod 600 $CREDENTIALS${NC}"
+            fi
         fi
     fi
 
@@ -1082,7 +1122,7 @@ mount_share() {
             fi
         fi
 
-        run_maybe_sudo chown "$ACTUAL_USER:$ACTUAL_USER" "$mount_point" 2>/dev/null || true
+        run_maybe_sudo chown "$REAL_USER:$REAL_USER" "$mount_point" 2>/dev/null || true
     fi
 
     # Mount options
@@ -1091,15 +1131,9 @@ mount_share() {
 
     log_message "INFO" "${BLUE}Mounting $share_name...${NC}"
 
-    # Try mount without sudo
-    if mount -t cifs "$share_path" "$mount_point" -o "$mount_options" 2>>"$LOG_FILE"; then
-        log_message "INFO" "${GREEN}$share_name mounted successfully at $mount_point${NC}"
-        return 0
-    fi
-
-    # Try mount with sudo/doas
+    # run_maybe_sudo tries without privilege first, then escalates if needed
     if run_maybe_sudo mount -t cifs "$share_path" "$mount_point" -o "$mount_options" 2>>"$LOG_FILE"; then
-        log_message "INFO" "${GREEN}$share_name mounted successfully at $mount_point (sudo)${NC}"
+        log_message "INFO" "${GREEN}$share_name mounted successfully at $mount_point${NC}"
         return 0
     fi
 
@@ -1144,16 +1178,9 @@ unmount_share() {
 
     log_message "INFO" "${BLUE}Unmounting $share_name...${NC}"
 
-    # Try unmount without sudo
-    if umount "$mount_point" 2>>"$LOG_FILE"; then
-        log_message "INFO" "${GREEN}$share_name unmounted successfully${NC}"
-        rmdir "$mount_point" 2>/dev/null || true
-        return 0
-    fi
-
-    # Try unmount with sudo/doas
+    # run_maybe_sudo tries without privilege first, then escalates if needed
     if run_maybe_sudo umount "$mount_point" 2>>"$LOG_FILE"; then
-        log_message "INFO" "${GREEN}$share_name unmounted successfully (sudo)${NC}"
+        log_message "INFO" "${GREEN}$share_name unmounted successfully${NC}"
         run_maybe_sudo rmdir "$mount_point" 2>/dev/null || true
         return 0
     fi
@@ -1284,15 +1311,13 @@ list_shares() {
             server_shares_output=$(smbclient -L "$SERVER" -N 2>/dev/null || true)
         fi
 
-        # If both failed → adaptive sudo
+        # If both failed → run_maybe_sudo (respects SMBMNT_NO_SUDO / SMBMNT_PREFER_SUDO)
         if [ -z "$server_shares_output" ]; then
-            if command -v sudo >/dev/null && sudo -n true 2>/dev/null; then
-                if [ -f "$CREDENTIALS" ]; then
-                    server_shares_output=$(sudo smbclient -L "$SERVER" -A "$CREDENTIALS" 2>/dev/null || true)
-                fi
-                if [ -z "$server_shares_output" ]; then
-                    server_shares_output=$(sudo smbclient -L "$SERVER" -N 2>/dev/null || true)
-                fi
+            if [ -f "$CREDENTIALS" ]; then
+                server_shares_output=$(run_maybe_sudo smbclient -L "$SERVER" -A "$CREDENTIALS" 2>/dev/null || true)
+            fi
+            if [ -z "$server_shares_output" ]; then
+                server_shares_output=$(run_maybe_sudo smbclient -L "$SERVER" -N 2>/dev/null || true)
             fi
         fi
 
