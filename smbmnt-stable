@@ -5,17 +5,25 @@ IFS=$'\n\t'
 
 SCRIPT_VERSION="3.2.1"
 
+# Require bash 4+ — mapfile, ${var,,}, and (( 8#octal )) arithmetic are all bash 4 features.
+# macOS ships bash 3.2; users need to install bash via Homebrew and invoke explicitly.
+if (( BASH_VERSINFO[0] < 4 )); then
+    echo "Error: smbmnt requires bash 4.0 or later (detected: ${BASH_VERSION})" >&2
+    echo "  macOS users: brew install bash, then run with /usr/local/bin/bash smbmnt" >&2
+    exit 1
+fi
+
 # Resolve the real invoking user even under sudo — single source of truth.
 # ACTUAL_USER/ACTUAL_USER_HOME were previously duplicated by REAL_USER/REAL_HOME;
 # consolidated here to avoid divergence.
 REAL_USER="${SUDO_USER:-${USER:-$(whoami 2>/dev/null || echo root)}}"
 REAL_HOME="$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6 || true)"
-if [ -z "$REAL_HOME" ] || [ ! -d "$REAL_HOME" ]; then
+if [[ -z "$REAL_HOME" ]] || [[ ! -d "$REAL_HOME" ]]; then
     REAL_HOME="${HOME:-/root}"
 fi
 
 # validate home directory
-if [ ! -d "$REAL_HOME" ] || [ ! -r "$REAL_HOME" ]; then
+if [[ ! -d "$REAL_HOME" ]] || [[ ! -r "$REAL_HOME" ]]; then
     echo "Error: Could not determine valid home directory: '$REAL_HOME'"
     exit 1
 fi
@@ -91,7 +99,7 @@ log_message() {
 
 # debug_log: only prints when DEBUG_MODE=true (--debug flag or SMBMNT_DEBUG=true env var)
 debug_log() {
-    if [ "${DEBUG_MODE:-false}" = true ]; then
+    if [[ "${DEBUG_MODE:-false}" = true ]]; then
         local msg="$*"
         printf "%b\n" "${CYAN}🔍 DEBUG: $msg${NC}" >&2
         echo "$(date '+%Y-%m-%d %H:%M:%S') [DEBUG] $msg" >> "$LOG_FILE"
@@ -167,7 +175,7 @@ validate_number() {
         return 1
     fi
 
-    if [ "$input" -lt "$min" ] || [ "$input" -gt "$max" ]; then
+    if (( input < min || input > max )); then
         debug_log "Input '$input' outside range $min-$max"
         return 1
     fi
@@ -197,7 +205,7 @@ require_dependency() {
     local hint="${2:-}"
     if ! command -v "$dep" &>/dev/null; then
         log_message "ERROR" "${RED}Required tool not found: $dep${NC}"
-        if [ -n "$hint" ]; then
+        if [[ -n "$hint" ]]; then
             log_message "INFO" "${YELLOW}Install hint: $hint${NC}"
         fi
         return 1
@@ -218,21 +226,21 @@ run_maybe_sudo() {
     local cmd_display="${cmd_str//$'\n'/ }"
 
     # 1) Global override: never use sudo/doas
-    if [ "${SMBMNT_NO_SUDO:-false}" = true ]; then
+    if [[ "${SMBMNT_NO_SUDO:-false}" = true ]]; then
         debug_log "NO_SUDO=true → running without escalation: $cmd_display"
         "${cmd[@]}"
         return $?
     fi
 
     # 2) Already root → no escalation needed
-    if [ "$(id -u)" -eq 0 ]; then
+    if (( $(id -u) == 0 )); then
         debug_log "Running as root → $cmd_display"
         "${cmd[@]}"
         return $?
     fi
 
     # 3) Optional: prefer sudo/doas even if unprivileged works
-    if [ "${SMBMNT_PREFER_SUDO:-false}" = true ]; then
+    if [[ "${SMBMNT_PREFER_SUDO:-false}" = true ]]; then
         if command -v sudo >/dev/null; then
             debug_log "PREFER_SUDO=true → sudo $cmd_display"
             sudo "${cmd[@]}"
@@ -338,7 +346,7 @@ show_usage() {
 # Parse the config file safely using grep/awk instead of sourcing,
 # to avoid executing arbitrary code from a potentially tampered file.
 load_config() {
-    if [ ! -f "$CONFIG_FILE" ]; then
+    if [[ ! -f "$CONFIG_FILE" ]]; then
         debug_log "No config file found — using defaults"
         SERVER="$DEFAULT_SERVER"
         SHARES=("${DEFAULT_SHARES[@]}")
@@ -360,7 +368,7 @@ load_config() {
     debug_log "Parsed SHARES raw: '$parsed_shares_raw'"
 
     # Validate SERVER
-    if [ -z "$parsed_server" ]; then
+    if [[ -z "$parsed_server" ]]; then
         log_message "WARNING" "${YELLOW}Config missing SERVER entry — using defaults${NC}"
         SERVER="$DEFAULT_SERVER"
         SHARES=("${DEFAULT_SHARES[@]}")
@@ -374,23 +382,26 @@ load_config() {
         return 1
     fi
 
-    # Parse SHARES list
-    if [ -n "$parsed_shares_raw" ]; then
+    # Parse SHARES list — entries are stored as "ShareName" quoted tokens.
+    # Use a proper quoted-token extractor rather than splitting on spaces, so share
+    # names that contain spaces (e.g. "My Documents") survive the round-trip.
+    if [[ -n "$parsed_shares_raw" ]]; then
         while IFS= read -r share; do
-            share="${share%\"}"
-            share="${share#\"}"
-
-            if [[ "$share" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            # Reject only path-traversal and shell metacharacters; allow spaces,
+            # dots, dollars (admin shares like SYSVOL$) and other SMB-legal chars.
+            if [[ -z "$share" ]] || [[ ${#share} -gt 255 ]]; then
+                log_message "WARNING" "${YELLOW}Skipping empty or oversized share in config${NC}"
+            elif [[ "$share" =~ [/\\] ]] || [[ "$share" =~ [\`\;\|\&\(\)\<\>] ]]; then
+                log_message "WARNING" "${YELLOW}Skipping share with dangerous characters in config: '$share'${NC}"
+            else
                 parsed_shares+=("$share")
                 debug_log "Valid share: '$share'"
-            else
-                log_message "WARNING" "${YELLOW}Skipping invalid share in config: '$share'${NC}"
             fi
-        done < <(echo "$parsed_shares_raw" | tr ' ' '\n' | grep -v '^$')
+        done < <(grep -oE '"[^"]*"' <<< "$parsed_shares_raw" | sed 's/^"//;s/"$//')
     fi
 
     # Validate SHARES
-    if [ ${#parsed_shares[@]} -eq 0 ]; then
+    if (( ${#parsed_shares[@]} == 0 )); then
         log_message "WARNING" "${YELLOW}No valid shares in config — using defaults${NC}"
         SERVER="$DEFAULT_SERVER"
         SHARES=("${DEFAULT_SHARES[@]}")
@@ -412,12 +423,12 @@ save_config() {
     shift
     local shares=("$@")
 
-    if [ -z "$server" ]; then
+    if [[ -z "$server" ]]; then
         log_message "ERROR" "${RED}Server cannot be empty${NC}"
         return 1
     fi
 
-    if [ ${#shares[@]} -eq 0 ]; then
+    if (( ${#shares[@]} == 0 )); then
         log_message "ERROR" "${RED}At least one share must be specified${NC}"
         return 1
     fi
@@ -433,7 +444,7 @@ save_config() {
         return 1
     fi
 
-    if [ -f "$CONFIG_FILE" ]; then
+    if [[ -f "$CONFIG_FILE" ]]; then
         if ! cp "$CONFIG_FILE" "${CONFIG_FILE}.backup" 2>/dev/null; then
             log_message "WARNING" "${YELLOW}Could not create backup${NC}"
         fi
@@ -460,7 +471,7 @@ save_config() {
     } > "$config_tmp" 2>/dev/null; then
         log_message "ERROR" "${RED}Failed to write config file${NC}"
         rm -f "$config_tmp"
-        if [ -f "${CONFIG_FILE}.backup" ]; then
+        if [[ -f "${CONFIG_FILE}.backup" ]]; then
             mv "${CONFIG_FILE}.backup" "$CONFIG_FILE" 2>/dev/null
         fi
         return 1
@@ -470,7 +481,7 @@ save_config() {
     if ! grep -qE '^SERVER="[^"]+"' "$config_tmp"; then
         log_message "ERROR" "${RED}Generated configuration failed validation${NC}"
         rm -f "$config_tmp"
-        if [ -f "${CONFIG_FILE}.backup" ]; then
+        if [[ -f "${CONFIG_FILE}.backup" ]]; then
             mv "${CONFIG_FILE}.backup" "$CONFIG_FILE"
             log_message "INFO" "${YELLOW}Restored previous configuration${NC}"
         fi
@@ -493,7 +504,7 @@ save_config() {
 }
 
 reset_config() {
-    if [ -f "$CONFIG_FILE" ]; then
+    if [[ -f "$CONFIG_FILE" ]]; then
         # Capture the timestamp once to avoid race between cp and the log message
         local backup_ts
         backup_ts=$(date +%Y%m%d-%H%M%S)
@@ -526,13 +537,13 @@ show_config() {
     done
     log_message "INFO" ""
 
-    if [ -f "$CONFIG_FILE" ]; then
+    if [[ -f "$CONFIG_FILE" ]]; then
         local last_modified
         last_modified=$(date -r "$CONFIG_FILE" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "$CONFIG_FILE" 2>/dev/null)
         log_message "INFO" "${BLUE}Config File:${NC}"
         log_message "INFO" "  Location: $CONFIG_FILE"
         log_message "INFO" "  Modified: $last_modified"
-        if [ -f "${CONFIG_FILE}.backup" ]; then
+        if [[ -f "${CONFIG_FILE}.backup" ]]; then
             log_message "INFO" "  Backup:   ${CONFIG_FILE}.backup"
         fi
     else
@@ -543,7 +554,7 @@ show_config() {
 }
 
 detect_network() {
-    if [ -n "$NETWORK_SCAN_PREFERENCE" ]; then
+    if [[ -n "$NETWORK_SCAN_PREFERENCE" ]]; then
         echo "$NETWORK_SCAN_PREFERENCE"
         return 0
     fi
@@ -559,10 +570,10 @@ detect_network() {
               awk '{print $1}' | \
               head -n1)
 
-    if [ -z "$network" ]; then
+    if [[ -z "$network" ]]; then
         local gateway
         gateway=$(ip route show default 2>/dev/null | awk '{print $3}' | head -n1)
-        if [ -n "$gateway" ]; then
+        if [[ -n "$gateway" ]]; then
             if [[ "$gateway" =~ ^([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\.[0-9]{1,3}$ ]]; then
                 network="${BASH_REMATCH[1]}.0/24"
             else
@@ -571,7 +582,7 @@ detect_network() {
         fi
     fi
 
-    if [ -z "$network" ]; then
+    if [[ -z "$network" ]]; then
         log_message "ERROR" "${RED}Could not detect network. Run -S <network>.${NC}"
         return 1
     fi
@@ -589,7 +600,7 @@ discover_servers() {
     fi
     network="$raw_network"
 
-    if [ -z "$network" ]; then
+    if [[ -z "$network" ]]; then
         if ! network=$(detect_network); then
             return 1
         fi
@@ -631,14 +642,14 @@ discover_servers() {
     done < "$temp_file"
     rm -f "$temp_file"
 
-    if [ ${#servers[@]} -eq 0 ]; then
+    if (( ${#servers[@]} == 0 )); then
         echo "No SMB servers found on $network"
         return 1
     fi
 
     echo "Found ${#servers[@]} SMB server(s)"
 
-    if [ -s "$DISCOVERED_SERVERS_FILE" ]; then
+    if [[ -s "$DISCOVERED_SERVERS_FILE" ]]; then
         read -r -p "Refresh discovered servers cache? (y/N): " refresh_choice
         if [[ "$refresh_choice" =~ ^[Yy]$ ]]; then
             : > "$DISCOVERED_SERVERS_FILE"
@@ -656,11 +667,11 @@ discover_servers() {
         echo "Testing server (5-10s) $ip..."
 
         hostname=$(host "$ip" 2>/dev/null | awk '/domain name pointer/ {sub(/\.$/, "", $NF); print tolower($NF)}' | head -n1 || true)
-        if [ -z "$hostname" ] && command -v nmblookup &> /dev/null; then
+        if [[ -z "$hostname" ]] && command -v nmblookup &> /dev/null; then
             hostname=$(nmblookup -A "$ip" 2>/dev/null | grep "<00>" | head -n1 | awk '{print $1}' | tr '[:upper:]' '[:lower:]' || true)
         fi
 
-        if [ -n "$hostname" ]; then
+        if [[ -n "$hostname" ]]; then
             echo "$((i+1))) $ip ($hostname)"
             cache_lines+=("$ip:$hostname")
         else
@@ -669,10 +680,18 @@ discover_servers() {
         fi
     done
 
-    # Batch-write all entries in a single file open rather than one >> per iteration
-    printf '%s\n' "${cache_lines[@]}" >> "$DISCOVERED_SERVERS_FILE"
-
-    sort -u -o "$DISCOVERED_SERVERS_FILE" "$DISCOVERED_SERVERS_FILE"
+    # Atomic write: merge existing cache + new entries, dedup, then mv into place.
+    # Avoids a window where another process reads a partially-written or unsorted file.
+    local servers_tmp
+    servers_tmp=$(mktemp) || {
+        log_message "ERROR" "${RED}Failed to create temp file for server cache${NC}"
+        return 1
+    }
+    _SMBMNT_TMPFILES+=("$servers_tmp")
+    {
+        [ -f "$DISCOVERED_SERVERS_FILE" ] && cat "$DISCOVERED_SERVERS_FILE"
+        printf '%s\n' "${cache_lines[@]}"
+    } | sort -u > "$servers_tmp" && mv "$servers_tmp" "$DISCOVERED_SERVERS_FILE"
 
     echo "Discovered servers saved to cache"
     echo "Use 'smbmnt -D' to select a found server and scan for shares"
@@ -681,7 +700,7 @@ discover_servers() {
 scan_shares() {
     local server_ip="$1"
 
-    if [ -z "$server_ip" ]; then
+    if [[ -z "$server_ip" ]]; then
         log_message "ERROR" "${RED}Server IP required${NC}"
         return 1
     fi
@@ -700,7 +719,7 @@ scan_shares() {
     #
     # 1) Try credentialed access first (modern SMB servers)
     #
-    if [ -f "$CREDENTIALS" ]; then
+    if [[ -f "$CREDENTIALS" ]]; then
         if ! shares_output=$(run_maybe_sudo smbclient -L "$server_ip" -A "$CREDENTIALS" 2>/dev/null); then
             # 2) Credentials failed → try guest
             if ! shares_output=$(run_maybe_sudo smbclient -L "$server_ip" -N 2>/dev/null); then
@@ -732,7 +751,7 @@ scan_shares() {
         grep -v "print\$" | \
         grep -v "nobody")
 
-    if [ ${#shares[@]} -eq 0 ]; then
+    if (( ${#shares[@]} == 0 )); then
         log_message "ERROR" "${RED}No shares found${NC}"
         return 1
     fi
@@ -790,14 +809,17 @@ generate_fstab() {
     local fstab_entries=()
     local share mount_point entry
 
-    if [ -z "$choice" ]; then
+    if [[ -z "$choice" ]]; then
         log_message "ERROR" "${RED}No choice specified for fstab generation${NC}"
         return 1
     fi
 
     if [[ "$choice" == "all" ]]; then
         for share in "${SHARES[@]}"; do
-            mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share,,}"
+            local share_safe="${share,,}"
+            share_safe="${share_safe// /_}"
+            share_safe="${share_safe//\$/}"
+            mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_safe}"
             if [[ "$mount_point" =~ [[:space:]] ]]; then
                 log_message "ERROR" "${RED}Invalid mount point (contains spaces): $mount_point${NC}"
                 continue
@@ -809,9 +831,12 @@ generate_fstab() {
         for ch in "${CHOICES[@]}"; do
             ch=$(echo "$ch" | tr -d ' ')
             local index=$((ch-1))
-            if [ $index -ge 0 ] && [ $index -lt ${#SHARES[@]} ]; then
+            if (( index >= 0 && index < ${#SHARES[@]} )); then
                 share="${SHARES[$index]}"
-                mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share,,}"
+                local share_safe="${share,,}"
+                share_safe="${share_safe// /_}"
+                share_safe="${share_safe//\$/}"
+                mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_safe}"
                 if [[ "$mount_point" =~ [[:space:]] ]]; then
                     log_message "ERROR" "${RED}Invalid mount point (contains spaces): $mount_point${NC}"
                     continue
@@ -826,12 +851,12 @@ generate_fstab() {
         return 1
     fi
 
-    if [ ${#fstab_entries[@]} -eq 0 ]; then
+    if (( ${#fstab_entries[@]} == 0 )); then
         log_message "ERROR" "${RED}No valid fstab entries generated${NC}"
         return 1
     fi
 
-    if [ "$dry_run" = true ]; then
+    if [[ "$dry_run" = true ]]; then
         log_message "INFO" "${CYAN}🚫 DRY RUN: Would add these fstab entries:${NC}"
         for entry in "${fstab_entries[@]}"; do
             log_message "INFO" "${CYAN}  📄 $entry${NC}"
@@ -878,11 +903,11 @@ generate_fstab() {
     log_message "INFO" "${CYAN}Summary:${NC}"
     log_message "INFO" "  ${GREEN}Added: $added_count${NC}"
     log_message "INFO" "  ${YELLOW}Skipped (already exists): $skipped_count${NC}"
-    if [ $error_count -gt 0 ]; then
+    if (( error_count > 0 )); then
         log_message "INFO" "  ${RED}Errors: $error_count${NC}"
     fi
 
-    if [ $added_count -gt 0 ]; then
+    if (( added_count > 0 )); then
         log_message "INFO" ""
         log_message "INFO" "${YELLOW}Run 'sudo mount -a' to apply fstab changes${NC}"
     fi
@@ -891,9 +916,9 @@ generate_fstab() {
 }
 
 show_status() {
-    log_message "INFO" "${PURPLE} ╔═══════════════════════════════════════════════════════════════════════╗"
-    log_message "INFO" " ║                        SMB Mount Status                               ║"
-    log_message "INFO" " ╚═══════════════════════════════════════════════════════════════════════╝${NC}"
+    log_message "INFO" "${PURPLE} ╔═══════════════════════════════════════════════════════════════════════╗${NC}"
+    log_message "INFO" "${PURPLE} ║                        SMB Mount Status                               ║${NC}"
+    log_message "INFO" "${PURPLE} ╚═══════════════════════════════════════════════════════════════════════╝${NC}"
 
     local mounted_count=0
 
@@ -905,7 +930,10 @@ show_status() {
     printf "%-20s %-25s %-15s %-10s\n" "----------" "-----------" "------" "----"
 
     for share in "${SHARES[@]}"; do
-        local mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share,,}"
+        local share_safe="${share,,}"
+        share_safe="${share_safe// /_}"
+        share_safe="${share_safe//\$/}"
+        local mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_safe}"
         if mountpoint -q "$mount_point" 2>/dev/null || grep -q " $mount_point " /proc/mounts 2>/dev/null; then
             local server_info
             server_info=$(grep " $mount_point " /proc/mounts 2>/dev/null | sed 's/.*\/\/\([^/]*\)\/.*/\1/' || true)
@@ -916,7 +944,7 @@ show_status() {
         fi
     done
 
-    if [ $mounted_count -eq 0 ]; then
+    if (( mounted_count == 0 )); then
         log_message "INFO" "${YELLOW}   No SMB shares currently mounted${NC}"
     fi
 
@@ -925,7 +953,7 @@ show_status() {
     log_message "INFO" "   Mounted shares: $mounted_count/${#SHARES[@]}"
     log_message "INFO" "   Default server: $SERVER"
 
-    if [ -f "$CONFIG_FILE" ]; then
+    if [[ -f "$CONFIG_FILE" ]]; then
         log_message "INFO" "   Config source:  ${GREEN}$CONFIG_FILE${NC}"
     else
         log_message "INFO" "   Config source:  ${YELLOW}Built-in defaults${NC}"
@@ -934,11 +962,11 @@ show_status() {
     log_message "INFO" "   Mount base: $MOUNT_BASE"
     log_message "INFO" "   Log file: $LOG_FILE"
 
-    if [ -f "$DISCOVERED_SERVERS_FILE" ] && [ -s "$DISCOVERED_SERVERS_FILE" ]; then
+    if [[ -f "$DISCOVERED_SERVERS_FILE" && -s "$DISCOVERED_SERVERS_FILE" ]]; then
         log_message "INFO" ""
         log_message "INFO" "${PURPLE}Recently Discovered Servers:${NC}"
         while IFS=':' read -r ip hostname; do
-            if [ -n "$hostname" ]; then
+            if [[ -n "$hostname" ]]; then
                 log_message "INFO" "   • $ip ($hostname)"
             else
                 log_message "INFO" "   • $ip"
@@ -951,7 +979,7 @@ show_status() {
 }
 
 use_discovered() {
-    if [ ! -f "$DISCOVERED_SERVERS_FILE" ] || [ ! -s "$DISCOVERED_SERVERS_FILE" ]; then
+    if [[ ! -f "$DISCOVERED_SERVERS_FILE" || ! -s "$DISCOVERED_SERVERS_FILE" ]]; then
         log_message "ERROR" "${RED}No discovered servers found${NC}"
         log_message "INFO" "${YELLOW}Run 'smbmnt -S' first to scan for SMB servers${NC}"
         return 1
@@ -965,8 +993,8 @@ use_discovered() {
     local i=1
 
     while IFS=':' read -r ip hostname; do
-        if [ -n "$ip" ]; then
-            if [ -n "$hostname" ]; then
+        if [[ -n "$ip" ]]; then
+            if [[ -n "$hostname" ]]; then
                 log_message "INFO" "   ${GREEN}$i) $ip ($hostname)${NC}"
             else
                 log_message "INFO" "   ${GREEN}$i) $ip${NC}"
@@ -981,16 +1009,16 @@ use_discovered() {
     log_message "INFO" "   ${YELLOW}0) Cancel${NC}"
     log_message "INFO" ""
 
-    if [ ${#servers[@]} -eq 0 ]; then
+    if (( ${#servers[@]} == 0 )); then
         log_message "ERROR" "${RED}No valid servers found in cache${NC}"
         return 1
     fi
 
-    if [ ${#servers[@]} -eq 1 ]; then
+    if (( ${#servers[@]} == 1 )); then
         SERVER="${servers[0]}"
         local selected_hostname="${hostnames[0]}"
 
-        if [ -n "$selected_hostname" ]; then
+        if [[ -n "$selected_hostname" ]]; then
             log_message "INFO" "${CYAN}Only one server found: $SERVER ($selected_hostname)${NC}"
         else
             log_message "INFO" "${CYAN}Only one server found: $SERVER${NC}"
@@ -1009,7 +1037,7 @@ use_discovered() {
         while true; do
             read -r -p "Select server (0-${#servers[@]}): " choice
 
-            if [ "$choice" = "0" ]; then
+            if [[ "$choice" = "0" ]]; then
                 log_message "INFO" "${YELLOW}Selection cancelled${NC}"
                 return 1
             fi
@@ -1019,7 +1047,7 @@ use_discovered() {
                 SERVER="${servers[$index]}"
                 local selected_hostname="${hostnames[$index]}"
 
-                if [ -n "$selected_hostname" ]; then
+                if [[ -n "$selected_hostname" ]]; then
                     log_message "INFO" "${GREEN}Selected server: $SERVER ($selected_hostname)${NC}"
                 else
                     log_message "INFO" "${GREEN}Selected server: $SERVER${NC}"
@@ -1049,17 +1077,26 @@ use_discovered() {
 mount_share() {
     local share_name="$1"
     local dry_run="${2:-false}"
-    local mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_name,,}"
+    # Derive a filesystem-safe mount point name: lowercase, spaces→underscores, $→empty
+    local share_safe="${share_name,,}"
+    share_safe="${share_safe// /_}"
+    share_safe="${share_safe//\$/}"
+    local mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_safe}"
     local share_path="//$SERVER/$share_name"
 
-    # Validate share name
-    if [[ ! "$share_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-        log_message "ERROR" "${RED}Invalid share name: $share_name${NC}"
+    # Validate share name — reject path traversal and shell metacharacters only.
+    # SMB share names legitimately contain spaces, dots, and dollar signs (e.g. SYSVOL$).
+    if [[ -z "$share_name" ]] || [[ ${#share_name} -gt 255 ]]; then
+        log_message "ERROR" "${RED}Share name empty or too long: $share_name${NC}"
+        return 1
+    fi
+    if [[ "$share_name" =~ [/\\] ]] || [[ "$share_name" =~ [\`\;\|\&\(\)\<\>] ]]; then
+        log_message "ERROR" "${RED}Share name contains dangerous characters: $share_name${NC}"
         return 1
     fi
 
     # Guard against absurdly long paths
-    if [ ${#mount_point} -ge 4096 ]; then
+    if (( ${#mount_point} >= 4096 )); then
         log_message "ERROR" "${RED}Mount point path too long: $mount_point${NC}"
         return 1
     fi
@@ -1070,7 +1107,7 @@ mount_share() {
     fi
 
     # DRY RUN — preview only, credentials not required to be present
-    if [ "$dry_run" = true ]; then
+    if [[ "$dry_run" = true ]]; then
         log_message "INFO" "${CYAN}🚫 DRY RUN: Would mount share:${NC}"
         log_message "INFO" "${CYAN}  📁 Share: $share_name${NC}"
         log_message "INFO" "${CYAN}  📍 Mount point: $mount_point${NC}"
@@ -1083,7 +1120,7 @@ mount_share() {
     fi
 
     # Verify credentials file exists and has safe permissions
-    if [ ! -f "$CREDENTIALS" ]; then
+    if [[ ! -f "$CREDENTIALS" ]]; then
         log_message "ERROR" "${RED}Credentials file not found: $CREDENTIALS${NC}"
         return 1
     fi
@@ -1092,7 +1129,7 @@ mount_share() {
     #   0x3E = 0b00111110 covers group-read(040), group-write(020), other-read(004), other-write(002)
     local cred_perms_oct
     cred_perms_oct=$(stat -c '%a' "$CREDENTIALS" 2>/dev/null || true)
-    if [ -n "$cred_perms_oct" ]; then
+    if [[ -n "$cred_perms_oct" ]]; then
         local cred_perms_dec=$(( 8#$cred_perms_oct ))
         if (( (cred_perms_dec & 0x3E) != 0 )); then
             log_message "WARNING" "${YELLOW}Credentials file has insecure permissions ($cred_perms_oct) — recommend chmod 600 $CREDENTIALS${NC}"
@@ -1106,7 +1143,7 @@ mount_share() {
     fi
 
     # Ensure mount directory exists
-    if [ ! -d "$mount_point" ]; then
+    if [[ ! -d "$mount_point" ]]; then
         debug_log "Creating mount directory: $mount_point"
 
         if ! mkdir -p "$mount_point" 2>/dev/null; then
@@ -1139,15 +1176,22 @@ mount_share() {
 unmount_share() {
     local share_name="$1"
     local dry_run="${2:-false}"
-    local mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_name,,}"
+    local share_safe="${share_name,,}"
+    share_safe="${share_safe// /_}"
+    share_safe="${share_safe//\$/}"
+    local mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_safe}"
 
-    if [[ ! "$share_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-        log_message "ERROR" "${RED}Invalid share name: $share_name${NC}"
+    if [[ -z "$share_name" ]] || [[ ${#share_name} -gt 255 ]]; then
+        log_message "ERROR" "${RED}Share name empty or too long: $share_name${NC}"
+        return 1
+    fi
+    if [[ "$share_name" =~ [/\\] ]] || [[ "$share_name" =~ [\`\;\|\&\(\)\<\>] ]]; then
+        log_message "ERROR" "${RED}Share name contains dangerous characters: $share_name${NC}"
         return 1
     fi
 
     # DRY RUN
-    if [ "$dry_run" = true ]; then
+    if [[ "$dry_run" = true ]]; then
         log_message "INFO" "${CYAN}🚫 DRY RUN: Would unmount share:${NC}"
         log_message "INFO" "${CYAN}  📁 Share: $share_name${NC}"
         log_message "INFO" "${CYAN}  📍 Mount point: $mount_point${NC}"
@@ -1264,11 +1308,11 @@ list_shares() {
     #
     # 2) Print reachability status
     #
-    if [ "$dns_ok" = false ]; then
+    if [[ "$dns_ok" = false ]]; then
         log_message "INFO" "${YELLOW}⚠️  DNS lookup failed for $SERVER${NC}"
     fi
 
-    if [ "$reachable" = true ]; then
+    if [[ "$reachable" = true ]]; then
         log_message "INFO" "${GREEN}✓ Server reachable${NC}"
     else
         log_message "INFO" "${RED}✗ Server unreachable${NC}"
@@ -1292,11 +1336,11 @@ list_shares() {
     local server_shares_output=""
     local -a server_shares=()
 
-    if [ "$smbclient_available" = true ]; then
+    if [[ "$smbclient_available" = true ]]; then
         # Try credentials first
-        if [ -f "$CREDENTIALS" ]; then
+        if [[ -f "$CREDENTIALS" ]]; then
             server_shares_output=$(smbclient -L "$SERVER" -A "$CREDENTIALS" 2>/dev/null || true)
-            if [ -z "$server_shares_output" ]; then
+            if [[ -z "$server_shares_output" ]]; then
                 # Try guest
                 server_shares_output=$(smbclient -L "$SERVER" -N 2>/dev/null || true)
             fi
@@ -1306,17 +1350,17 @@ list_shares() {
         fi
 
         # If both failed → run_maybe_sudo (respects SMBMNT_NO_SUDO / SMBMNT_PREFER_SUDO)
-        if [ -z "$server_shares_output" ]; then
-            if [ -f "$CREDENTIALS" ]; then
+        if [[ -z "$server_shares_output" ]]; then
+            if [[ -f "$CREDENTIALS" ]]; then
                 server_shares_output=$(run_maybe_sudo smbclient -L "$SERVER" -A "$CREDENTIALS" 2>/dev/null || true)
             fi
-            if [ -z "$server_shares_output" ]; then
+            if [[ -z "$server_shares_output" ]]; then
                 server_shares_output=$(run_maybe_sudo smbclient -L "$SERVER" -N 2>/dev/null || true)
             fi
         fi
 
         # Parse server share list
-        if [ -n "$server_shares_output" ]; then
+        if [[ -n "$server_shares_output" ]]; then
             mapfile -t server_shares < <(echo "$server_shares_output" | \
                 grep "Disk" | awk '{print $1}' | grep -v "^$" | grep -v "IPC\$" | grep -v "print\$" | grep -v "nobody")
         fi
@@ -1331,7 +1375,10 @@ list_shares() {
     for i in "${!SHARES[@]}"; do
         local share="${SHARES[$i]}"
         local mount_point
-        mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share,,}"
+        local share_safe="${share,,}"
+        share_safe="${share_safe// /_}"
+        share_safe="${share_safe//\$/}"
+        mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_safe}"
         local status=""
         local size_info=""
         local warn_dir=""
@@ -1341,7 +1388,7 @@ list_shares() {
         #
         # Determine existence / permission status
         #
-        if [ "$smbclient_available" = false ]; then
+        if [[ "$smbclient_available" = false ]]; then
             # Cannot check — smbclient not installed
             exists_icon="⚫"
             exists_color="${YELLOW}"
@@ -1350,7 +1397,7 @@ list_shares() {
             exists_color="${GREEN}"
         else
             # If server unreachable → unknown
-            if [ "$reachable" = false ]; then
+            if [[ "$reachable" = false ]]; then
                 exists_icon="⚫"
                 exists_color="${YELLOW}"
             else
@@ -1378,7 +1425,7 @@ list_shares() {
         #
         # Warn if directory exists but not mounted
         #
-        if [ -d "$mount_point" ] && ! mountpoint -q "$mount_point"; then
+        if [[ -d "$mount_point" ]] && ! mountpoint -q "$mount_point"; then
             warn_dir="${YELLOW}(dir exists)${NC}"
         fi
 
@@ -1392,9 +1439,9 @@ list_shares() {
     # 5) Summary
     #
     local summary_color="$GREEN"
-    if [ "$mounted_count" -eq 0 ]; then
+    if (( mounted_count == 0 )); then
         summary_color="$YELLOW"
-    elif [ "$mounted_count" -lt "$total_count" ]; then
+    elif (( mounted_count < total_count )); then
         summary_color="$BLUE"
     fi
 
@@ -1404,7 +1451,7 @@ list_shares() {
     #
     # 6) Extra hint if server unreachable
     #
-    if [ "$reachable" = false ]; then
+    if [[ "$reachable" = false ]]; then
         log_message "INFO" "${RED}Note:${NC} Server appears offline — share existence cannot be verified."
     fi
 }
@@ -1421,7 +1468,7 @@ process_choices() {
 
     # Handle "all" using unified helpers
     if [[ "$choice" == "all" ]]; then
-        if [ "$action" == "mount" ]; then
+        if [[ "$action" == "mount" ]]; then
             mount_all_shares "$dry_run"
         else
             unmount_all_shares "$dry_run"
@@ -1436,8 +1483,8 @@ process_choices() {
             ch=$(echo "$ch" | tr -d ' ')
             local index=$((ch-1))
 
-            if [ $index -ge 0 ] && [ $index -lt ${#SHARES[@]} ]; then
-                if [ "$action" == "mount" ]; then
+            if (( index >= 0 && index < ${#SHARES[@]} )); then
+                if [[ "$action" == "mount" ]]; then
                     mount_share "${SHARES[$index]}" "$dry_run"
                 else
                     unmount_share "${SHARES[$index]}" "$dry_run"
@@ -1588,31 +1635,31 @@ main() {
     done
 
     # Config management (after full arg parse so --debug etc. take effect first)
-    if [ "$reset_config_flag" = true ]; then
+    if [[ "$reset_config_flag" = true ]]; then
         reset_config
         exit $?
     fi
 
-    if [ "$show_config_flag" = true ]; then
+    if [[ "$show_config_flag" = true ]]; then
         show_config
         exit $?
     fi
 
     # Generate fstab entries
-    if [ -n "$fstab_choice" ]; then
+    if [[ -n "$fstab_choice" ]]; then
         generate_fstab "$fstab_choice" "$dry_run"
         exit $?
     fi
 
     # Use discovered servers
-    if [ "$use_discovered_flag" = true ]; then
+    if [[ "$use_discovered_flag" = true ]]; then
         use_discovered
         exit $?
     fi
 
     # Network scan
-    if [ -n "$detect_network" ]; then
-        if [ "$detect_network" = "__auto__" ]; then
+    if [[ -n "$detect_network" ]]; then
+        if [[ "$detect_network" = "__auto__" ]]; then
             discover_servers ""
         else
             discover_servers "$detect_network"
@@ -1621,19 +1668,19 @@ main() {
     fi
 
     # Scan shares on a specific server
-    if [ -n "$scan_server" ]; then
+    if [[ -n "$scan_server" ]]; then
         scan_shares "$scan_server"
         exit $?
     fi
 
     # Status dashboard
-    if [ "$show_status_flag" = true ]; then
+    if [[ "$show_status_flag" = true ]]; then
         show_status
         exit $?
     fi
 
     # Interactive mode if no choice provided
-    if [ -z "$choice" ]; then
+    if [[ -z "$choice" ]]; then
         list_shares
         echo ""
         read -r -p "Enter choice (1-${#SHARES[@]}, all, or comma-separated): " choice
