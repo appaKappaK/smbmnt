@@ -3,7 +3,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="3.2.0"
+SCRIPT_VERSION="3.2.1"
 
 # $USER detection — resolve the real invoking user even under sudo
 if [ -n "${SUDO_USER:-}" ]; then
@@ -1258,37 +1258,49 @@ list_shares() {
     #
     # 3) Query server for actual share list (credentials-first, adaptive sudo)
     #
+
+    # Check smbclient availability before attempting queries — without it we
+    # cannot verify share existence and should say so rather than silently
+    # marking every share as unknown/unreachable.
+    local smbclient_available=true
+    if ! command -v smbclient &>/dev/null; then
+        log_message "WARNING" "${YELLOW}⚠️  smbclient not found — share existence check unavailable (install samba-client / cifs-utils)${NC}"
+        smbclient_available=false
+    fi
+
     local server_shares_output=""
     local -a server_shares=()
 
-    # Try credentials first
-    if [ -f "$CREDENTIALS" ]; then
-        server_shares_output=$(smbclient -L "$SERVER" -A "$CREDENTIALS" 2>/dev/null || true)
-        if [ -z "$server_shares_output" ]; then
-            # Try guest
+    if [ "$smbclient_available" = true ]; then
+        # Try credentials first
+        if [ -f "$CREDENTIALS" ]; then
+            server_shares_output=$(smbclient -L "$SERVER" -A "$CREDENTIALS" 2>/dev/null || true)
+            if [ -z "$server_shares_output" ]; then
+                # Try guest
+                server_shares_output=$(smbclient -L "$SERVER" -N 2>/dev/null || true)
+            fi
+        else
+            # No credentials → try guest
             server_shares_output=$(smbclient -L "$SERVER" -N 2>/dev/null || true)
         fi
-    else
-        # No credentials → try guest
-        server_shares_output=$(smbclient -L "$SERVER" -N 2>/dev/null || true)
-    fi
 
-    # If both failed → adaptive sudo
-    if [ -z "$server_shares_output" ]; then
-        if command -v sudo >/dev/null && sudo -n true 2>/dev/null; then
-            if [ -f "$CREDENTIALS" ]; then
-                server_shares_output=$(sudo smbclient -L "$SERVER" -A "$CREDENTIALS" 2>/dev/null || true)
-            fi
-            if [ -z "$server_shares_output" ]; then
-                server_shares_output=$(sudo smbclient -L "$SERVER" -N 2>/dev/null || true)
+        # If both failed → adaptive sudo
+        if [ -z "$server_shares_output" ]; then
+            if command -v sudo >/dev/null && sudo -n true 2>/dev/null; then
+                if [ -f "$CREDENTIALS" ]; then
+                    server_shares_output=$(sudo smbclient -L "$SERVER" -A "$CREDENTIALS" 2>/dev/null || true)
+                fi
+                if [ -z "$server_shares_output" ]; then
+                    server_shares_output=$(sudo smbclient -L "$SERVER" -N 2>/dev/null || true)
+                fi
             fi
         fi
-    fi
 
-    # Parse server share list
-    if [ -n "$server_shares_output" ]; then
-        mapfile -t server_shares < <(echo "$server_shares_output" | \
-            grep "Disk" | awk '{print $1}' | grep -v "^$" | grep -v "IPC\$" | grep -v "print\$" | grep -v "nobody")
+        # Parse server share list
+        if [ -n "$server_shares_output" ]; then
+            mapfile -t server_shares < <(echo "$server_shares_output" | \
+                grep "Disk" | awk '{print $1}' | grep -v "^$" | grep -v "IPC\$" | grep -v "print\$" | grep -v "nobody")
+        fi
     fi
 
     #
@@ -1310,7 +1322,11 @@ list_shares() {
         #
         # Determine existence / permission status
         #
-        if printf '%s\n' "${server_shares[@]}" | grep -Fxq "$share"; then
+        if [ "$smbclient_available" = false ]; then
+            # Cannot check — smbclient not installed
+            exists_icon="⚫"
+            exists_color="${YELLOW}"
+        elif printf '%s\n' "${server_shares[@]}" | grep -Fxq "$share"; then
             exists_icon="🟢"
             exists_color="${GREEN}"
         else

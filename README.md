@@ -178,6 +178,9 @@ smbmnt --version                # Show version
 
 ## Update History
 
+#### v3.2.1 — Bug Fix Release (2026-02-26)
+- Fixed `list_shares` silently treating every share as unknown when `smbclient` is not installed — the function now checks for `smbclient` upfront, emits a clear warning if it is missing, skips the query block entirely, and marks all existence indicators as `⚫` (unknown) rather than `🔴` (not found), which would incorrectly imply a check was performed
+
 #### v3.2.0 — Feature Release (2026-02-26)
 - Added `run_maybe_sudo()` — unified privilege escalation helper that tries without sudo first, then falls back to passwordless sudo, interactive sudo, and doas in sequence; avoids redundant escalation when already root
 - Added `SMBMNT_NO_SUDO=true` environment variable to disable all privilege escalation globally
