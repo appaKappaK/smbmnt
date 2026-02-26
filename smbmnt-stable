@@ -33,6 +33,7 @@ DEFAULT_SHARES=("ShareName")
 # runtime vars
 SERVER="$DEFAULT_SERVER"
 SHARES=("${DEFAULT_SHARES[@]}")
+CREDENTIALS="$DEFAULT_CREDENTIALS"
 
 # mount & SMBversion
 # SMB 3.1.1 is the most secure dialect; override with --smb-version if your server requires an older version (e.g. 2.1, 3.0).
@@ -1386,10 +1387,10 @@ main() {
     local action="mount"
     local choice=""
     local dry_run=false
-    local use_discovered=false
+    local use_discovered_flag=false
     local scan_network=""
     local scan_server=""
-    local show_status=false
+    local show_status_flag=false
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -1411,7 +1412,7 @@ main() {
                 dry_run=true
                 ;;
             -D|--discovered)
-                use_discovered=true
+                use_discovered_flag=true
                 ;;
             -S|--scan)
                 scan_network="${2:-}"
@@ -1422,7 +1423,7 @@ main() {
                 shift
                 ;;
             -st|--status)
-                show_status=true
+                show_status_flag=true
                 ;;
             --reset-config)
                 reset_config
@@ -1460,7 +1461,7 @@ main() {
     load_config
 
     # Use discovered servers
-    if [ "$use_discovered" = true ]; then
+    if [ "$use_discovered_flag" = true ]; then
         use_discovered
         exit $?
     fi
@@ -1478,7 +1479,7 @@ main() {
     fi
 
     # Status dashboard
-    if [ "$show_status" = true ]; then
+    if [ "$show_status_flag" = true ]; then
         show_status
         exit $?
     fi
