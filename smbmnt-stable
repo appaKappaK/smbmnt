@@ -3,7 +3,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-SCRIPT_VERSION="3.1.1"
+SCRIPT_VERSION="3.1.2"
 
 # $USER detection — resolve the real invoking user even under sudo
 if [ -n "${SUDO_USER:-}" ]; then
@@ -85,8 +85,9 @@ log_message() {
 # debug_log: only prints when DEBUG_MODE=true (--debug flag or SMBMNT_DEBUG=true env var)
 debug_log() {
     if [ "${DEBUG_MODE:-false}" = true ]; then
-        printf "%b\n" "${CYAN}🔍 DEBUG: $*${NC}" >&2
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [DEBUG] $*" >> "$LOG_FILE"
+        local msg="$*"
+        printf "%b\n" "${CYAN}🔍 DEBUG: $msg${NC}" >&2
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [DEBUG] $msg" >> "$LOG_FILE"
     fi
 }
 
@@ -212,62 +213,68 @@ fi
 
 run_maybe_sudo() {
     local cmd=("$@")
+    # Join cmd array with spaces for debug output, avoiding IFS=$'\n\t' separator issue
+    local cmd_str="${cmd[*]}"
+    local cmd_display="${cmd_str//$'\n'/ }"
 
     # 1) Global override: never use sudo/doas
     if [ "${SMBMNT_NO_SUDO:-false}" = true ]; then
-        debug_log "NO_SUDO=true → running without escalation: ${cmd[*]}"
+        debug_log "NO_SUDO=true → running without escalation: $cmd_display"
         "${cmd[@]}"
         return $?
     fi
 
     # 2) Already root → no escalation needed
     if [ "$(id -u)" -eq 0 ]; then
-        debug_log "Running as root → ${cmd[*]}"
+        debug_log "Running as root → $cmd_display"
         "${cmd[@]}"
         return $?
     fi
 
     # 3) Optional: prefer sudo/doas even if unprivileged works
     if [ "${SMBMNT_PREFER_SUDO:-false}" = true ]; then
-        if command -v sudo >/dev/null && sudo -n true 2>/dev/null; then
-            debug_log "PREFER_SUDO=true → sudo ${cmd[*]}"
+        if command -v sudo >/dev/null; then
+            debug_log "PREFER_SUDO=true → sudo $cmd_display"
             sudo "${cmd[@]}"
             return $?
         fi
         if command -v doas >/dev/null; then
-            debug_log "PREFER_SUDO=true → doas ${cmd[*]}"
+            debug_log "PREFER_SUDO=true → doas $cmd_display"
             doas "${cmd[@]}"
             return $?
         fi
         debug_log "PREFER_SUDO=true but no sudo/doas available → falling back"
     fi
 
-    # 4) Try without sudo first
-    debug_log "Trying without sudo: ${cmd[*]}"
+    # 4) Try without sudo first (suppress stderr to avoid noise for expected permission errors)
+    debug_log "Trying without sudo: $cmd_display"
     if "${cmd[@]}" 2>/dev/null; then
         return 0
     fi
 
-    # 5) Try sudo if available and passwordless
+    # 5) Try sudo — passwordless first (non-interactive), then interactive prompt
     if command -v sudo >/dev/null; then
         if sudo -n true 2>/dev/null; then
-            debug_log "Trying with sudo: ${cmd[*]}"
+            debug_log "Trying with sudo (passwordless): $cmd_display"
             sudo "${cmd[@]}"
             return $?
         else
-            debug_log "sudo exists but is not passwordless"
+            # sudo requires a password — allow interactive prompt
+            debug_log "Trying with sudo (interactive): $cmd_display"
+            sudo "${cmd[@]}"
+            return $?
         fi
     fi
 
     # 6) Try doas if available
     if command -v doas >/dev/null; then
-        debug_log "Trying with doas: ${cmd[*]}"
+        debug_log "Trying with doas: $cmd_display"
         doas "${cmd[@]}"
         return $?
     fi
 
     # 7) No escalation path succeeded
-    debug_log "Privilege escalation unavailable → command failed: ${cmd[*]}"
+    debug_log "Privilege escalation unavailable → command failed: $cmd_display"
     return 1
 }
 
@@ -396,7 +403,7 @@ load_config() {
     SERVER="$parsed_server"
     SHARES=("${parsed_shares[@]}")
 
-    log_message "INFO" "${GREEN}✓ Loaded config: $SERVER with ${#SHARES[@]} share(s)${NC}"
+    debug_log "Loaded config: $SERVER with ${#SHARES[@]} share(s)"
     debug_log "Final config: SERVER='$SERVER', SHARES=(${SHARES[*]})"
 
     return 0
@@ -587,10 +594,10 @@ discover_servers() {
         log_message "ERROR" "${RED}Failed to create temp file${NC}"
         return 1
     }
-    trap 'rm -f "${temp_file:-}"' EXIT
 
     # Try nmap normally, then via sudo if needed
     if ! run_maybe_sudo nmap "${NMAP_OPTIONS[@]}" -oG - "$network" | grep "445/open/tcp" > "$temp_file"; then
+        rm -f "$temp_file"
         echo "⚠️  nmap failed even with sudo. Scan cannot continue."
         return 1
     fi
@@ -601,6 +608,7 @@ discover_servers() {
         ip=$(echo "$line" | awk '{print $2}')
         [ -n "$ip" ] && servers+=("$ip")
     done < "$temp_file"
+    rm -f "$temp_file"
 
     if [ ${#servers[@]} -eq 0 ]; then
         echo "No SMB servers found on $network"
@@ -727,8 +735,11 @@ update_script_config() {
     log_message "INFO" "${BLUE}Saving configuration...${NC}"
 
     if save_config "$selected_server" "${discovered_shares[@]}"; then
+        local shares_display
+        shares_display=$(printf '%s, ' "${discovered_shares[@]}")
+        shares_display="${shares_display%, }"
         log_message "INFO" "${GREEN}✓ Server: $selected_server${NC}"
-        log_message "INFO" "${GREEN}✓ Shares: ${discovered_shares[*]// /, }${NC}"
+        log_message "INFO" "${GREEN}✓ Shares: $shares_display${NC}"
         log_message "INFO" ""
         log_message "INFO" "${CYAN}Configuration is now active for this session and future runs${NC}"
         return 0
@@ -1143,8 +1154,6 @@ mount_all_shares() {
     local failed=0
 
     for share in "${SHARES[@]}"; do
-        log_message "INFO" "${BLUE}Mounting $share...${NC}"
-
         if mount_share "$share" "$dry_run"; then
             success=$((success + 1))
         else
@@ -1169,8 +1178,6 @@ unmount_all_shares() {
     local failed=0
 
     for share in "${SHARES[@]}"; do
-        log_message "INFO" "${BLUE}Unmounting $share...${NC}"
-
         if unmount_share "$share" "$dry_run"; then
             success=$((success + 1))
         else
@@ -1354,7 +1361,6 @@ process_choices() {
 
     # Handle "all" using unified helpers
     if [[ "$choice" == "all" ]]; then
-        log_message "INFO" "${BLUE}${action^}ing all shares...${NC}"
         if [ "$action" == "mount" ]; then
             mount_all_shares "$dry_run"
         else
@@ -1396,10 +1402,47 @@ main() {
     local detect_network=""
     local scan_server=""
     local show_status_flag=false
+    local fstab_choice=""
+    local show_config_flag=false
+    local reset_config_flag=false
+
+    # Load config first so all early-exit flags (--config, --reset-config, --fstab) see real values
+    load_config
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            -ip|--server)
+                if [[ -n "${2:-}" ]] && [[ ! "${2}" =~ ^- ]]; then
+                    SERVER="${2}"
+                    shift
+                else
+                    log_message "ERROR" "${RED}--server requires an IP or hostname${NC}"
+                    exit 1
+                fi
+                ;;
+            -c|--credentials)
+                if [[ -n "${2:-}" ]] && [[ ! "${2}" =~ ^- ]]; then
+                    CREDENTIALS="${2}"
+                    shift
+                else
+                    log_message "ERROR" "${RED}--credentials requires a file path${NC}"
+                    exit 1
+                fi
+                ;;
+            --mount-base)
+                if [[ -n "${2:-}" ]] && [[ ! "${2}" =~ ^- ]]; then
+                    MOUNT_BASE="${2}"
+                    shift
+                else
+                    log_message "ERROR" "${RED}--mount-base requires a directory${NC}"
+                    exit 1
+                fi
+                ;;
+            -ls|--list)
+                list_shares
+                exit $?
+                ;;
             all)
                 choice="all"
                 ;;
@@ -1420,32 +1463,50 @@ main() {
                 use_discovered_flag=true
                 ;;
             -S|--scan)
-                detect_network="${2:-}"
-                shift
+                if [[ "${2:-}" =~ ^[0-9./]+$ ]]; then
+                    detect_network="${2}"
+                    shift
+                else
+                    detect_network="__auto__"
+                fi
                 ;;
             -Ss|--scan-shares)
-                scan_server="${2:-}"
-                shift
+                if [[ -n "${2:-}" ]] && [[ ! "${2}" =~ ^- ]]; then
+                    scan_server="${2}"
+                    shift
+                else
+                    scan_server=""
+                fi
                 ;;
             -st|--status)
                 show_status_flag=true
                 ;;
             --reset-config)
-                reset_config
-                exit $?
+                reset_config_flag=true
                 ;;
             --config)
-                show_config
-                exit $?
+                show_config_flag=true
                 ;;
             --fstab)
-                local fstab_choice="${2:-all}"
-                generate_fstab "$fstab_choice" "$dry_run"
-                exit $?
+                if [[ -n "${2:-}" ]] && [[ ! "${2}" =~ ^- ]]; then
+                    fstab_choice="${2}"
+                    shift
+                else
+                    fstab_choice="all"
+                fi
                 ;;
             --smb-version)
-                SMB_VERSION="$2"
-                shift
+                if [[ -n "${2:-}" ]] && [[ ! "${2}" =~ ^- ]]; then
+                    SMB_VERSION="${2}"
+                    shift
+                else
+                    log_message "ERROR" "${RED}--smb-version requires a version (e.g. 2.1, 3.0, 3.1.1)${NC}"
+                    exit 1
+                fi
+                ;;
+            --debug)
+                DEBUG_MODE=true
+                export DEBUG_MODE
                 ;;
             --version)
                 echo "$SCRIPT_VERSION"
@@ -1462,8 +1523,22 @@ main() {
         shift
     done
 
-    # Load config before doing anything else
-    load_config
+    # Config management (after full arg parse so --debug etc. take effect first)
+    if [ "$reset_config_flag" = true ]; then
+        reset_config
+        exit $?
+    fi
+
+    if [ "$show_config_flag" = true ]; then
+        show_config
+        exit $?
+    fi
+
+    # Generate fstab entries
+    if [ -n "$fstab_choice" ]; then
+        generate_fstab "$fstab_choice" "$dry_run"
+        exit $?
+    fi
 
     # Use discovered servers
     if [ "$use_discovered_flag" = true ]; then
@@ -1473,7 +1548,11 @@ main() {
 
     # Network scan
     if [ -n "$detect_network" ]; then
-        discover_servers "$detect_network"
+        if [ "$detect_network" = "__auto__" ]; then
+            discover_servers ""
+        else
+            discover_servers "$detect_network"
+        fi
         exit $?
     fi
 
