@@ -493,8 +493,9 @@ detect_network() {
 
 discover_servers() {
     local network
-    # Validate the network argument — only digits, dots, and slash are valid
     local raw_network="$1"
+
+    # Validate the network argument — only digits, dots, and slash are valid
     if [[ -n "$raw_network" ]] && [[ ! "$raw_network" =~ ^[0-9./]+$ ]]; then
         log_message "ERROR" "${RED}Invalid network argument: '$raw_network'${NC}"
         return 1
@@ -507,7 +508,7 @@ discover_servers() {
         fi
     fi
 
-    # nmap is only required for network scanning — enforce it here, not at startup
+    # nmap is only required for network scanning — enforce it here
     if ! require_dependency "nmap" "Install nmap: apt-get install nmap / dnf install nmap"; then
         return 1
     fi
@@ -515,22 +516,52 @@ discover_servers() {
     echo "Scanning network $network..."
     echo "Running scan (30-60 seconds)..."
 
-    local temp_file; temp_file=$(mktemp) || { log_message "ERROR" "${RED}Failed to create temp file${NC}"; return 1; }
-
+    local temp_file; temp_file=$(mktemp) || {
+        log_message "ERROR" "${RED}Failed to create temp file${NC}"
+        return 1
+    }
     trap 'rm -f "${temp_file:-}"' EXIT
 
-    # Use nmap grepable output (-oG) for more reliable parsing than screen output
-    sudo nmap "${NMAP_OPTIONS[@]}" -oG - "$network" 2>/dev/null | grep "445/open/tcp" > "$temp_file" || true
+    #
+    # 1) Try nmap normally first
+    #
+    if ! nmap "${NMAP_OPTIONS[@]}" -oG - "$network" 2>/dev/null | grep "445/open/tcp" > "$temp_file"; then
 
+        #
+        # 2) Normal nmap failed → check sudo availability
+        #
+
+        # sudo not installed
+        if ! command -v sudo >/dev/null; then
+            echo "⚠️  This system requires sudo for nmap, but sudo is not installed."
+            echo "   Try installing sudo or run the scan manually with root privileges."
+            return 1
+        fi
+
+        # sudo installed but cannot run without password
+        if ! sudo -n true 2>/dev/null; then
+            echo "⚠️  This system requires sudo for nmap, but a password prompt is not allowed in this mode."
+            echo "   Try running: sudo smbmnt -S"
+            return 1
+        fi
+
+        #
+        # 3) sudo is available and passwordless → run sudo nmap
+        #
+        if ! sudo nmap "${NMAP_OPTIONS[@]}" -oG - "$network" 2>/dev/null | grep "445/open/tcp" > "$temp_file"; then
+            echo "⚠️  nmap failed even with sudo. Scan cannot continue."
+            return 1
+        fi
+    fi
+
+    #
+    # 4) Parse discovered servers
+    #
     local servers=()
-
     while IFS= read -r line; do
-        # Grepable format: "Host: <ip> (<hostname>)  Ports: 445/tcp/open/..."
         local ip
         ip=$(echo "$line" | awk '{print $2}')
-        if [ -n "$ip" ]; then
-            servers+=("$ip")
-        fi
+        [ -n "$ip" ] && servers+=("$ip")
     done < "$temp_file"
 
     if [ ${#servers[@]} -eq 0 ]; then
@@ -540,6 +571,9 @@ discover_servers() {
 
     echo "Found ${#servers[@]} SMB server(s)"
 
+    #
+    # 5) Cache handling
+    #
     if [ -s "$DISCOVERED_SERVERS_FILE" ]; then
         read -r -p "Refresh discovered servers cache? (y/N): " refresh_choice
         if [[ "$refresh_choice" =~ ^[Yy]$ ]]; then
@@ -550,13 +584,15 @@ discover_servers() {
         fi
     fi
 
+    #
+    # 6) Reverse DNS lookup for each server
+    #
     for i in "${!servers[@]}"; do
         local ip="${servers[$i]}"
         local hostname=""
 
         echo "Testing server (5-10s) $ip..."
 
-        # Prefer 'host' over deprecated nslookup for reverse DNS lookup
         hostname=$(host "$ip" 2>/dev/null | awk '/domain name pointer/ {sub(/\.$/, "", $NF); print tolower($NF)}' | head -n1 || true)
         if [ -z "$hostname" ] && command -v nmblookup &> /dev/null; then
             hostname=$(nmblookup -A "$ip" 2>/dev/null | grep "<00>" | head -n1 | awk '{print $1}' | tr '[:upper:]' '[:lower:]' || true)
@@ -1166,6 +1202,11 @@ while [[ $# -gt 0 ]]; do
         --reset-config)
             CREDENTIALS_REQUIRED=false
             reset_config
+            exit 0
+            ;;
+        --clean-cache)
+            rm -f "$DISCOVERED_SERVERS_FILE"
+            log_message "INFO" "${GREEN}Cache cleared${NC}"
             exit 0
             ;;
         --mount-base)
