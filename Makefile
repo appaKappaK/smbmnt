@@ -1,5 +1,5 @@
 # smbmnt Makefile
-# Installs the script, man page, and bash completion.
+# Installs the script and man page, plus bash completion if bundled.
 # Targets: install, uninstall, check
 
 SHELL        := /bin/bash
@@ -18,7 +18,7 @@ COMP_FILE    := completions/smbmnt
 all:
 	@echo "Targets: install, uninstall, check"
 
-## install: Copy binary, man page, and completion file into place.
+## install: Copy binary, man page, and optional completion file into place.
 install:
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 755 $(SCRIPT) $(DESTDIR)$(BINDIR)/$(BIN_NAME)

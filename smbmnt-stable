@@ -74,13 +74,29 @@ touch "$LOG_FILE" 2>/dev/null && chmod 600 "$LOG_FILE" 2>/dev/null
 # that didn't get cleaned up via a local trap.
 _SMBMNT_TMPFILES=()
 _smbmnt_cleanup() {
+    local f
     # ${array[@]+"${array[@]}"} is the correct set -u safe expansion for arrays —
     # bare ${array[@]:-} does not work reliably for empty arrays in all bash versions.
-    for f in ${_SMBMNT_TMPFILES[@]+"${_SMBMNT_TMPFILES[@]}"}; do
+    for f in "${_SMBMNT_TMPFILES[@]}"; do
         rm -f "$f" 2>/dev/null
     done
 }
-trap '_smbmnt_cleanup' EXIT INT TERM
+
+_smbmnt_handle_signal() {
+    local signal_name="$1"
+    local exit_code="$2"
+
+    trap - EXIT INT TERM
+    _smbmnt_cleanup
+
+    printf '\n' >&2
+    log_message "INFO" "${YELLOW}Cancelled by ${signal_name}${NC}"
+    exit "$exit_code"
+}
+
+trap '_smbmnt_cleanup' EXIT
+trap '_smbmnt_handle_signal INT 130' INT
+trap '_smbmnt_handle_signal TERM 143' TERM
 
 # Strip ANSI color codes from a string for clean log output
 strip_ansi() {
@@ -197,6 +213,110 @@ validate_input() {
     echo "$input"
 }
 
+build_mount_point() {
+    local share_name="$1"
+    local legacy_share_safe
+    legacy_share_safe=$(legacy_mount_component "$share_name")
+    local server_safe="${SERVER//./-}"
+
+    if [[ -z "$legacy_share_safe" ]]; then
+        local encoded_share
+        encoded_share=$(encode_mount_component "$share_name")
+        printf '%s\n' "$MOUNT_BASE/samba-${server_safe}-share--${encoded_share}"
+        return 0
+    fi
+
+    # Preserve legacy mount paths unless two configured shares would collapse
+    # to the same normalized name, in which case suffix deterministically.
+    if share_needs_mount_disambiguation "$share_name" "$legacy_share_safe"; then
+        local encoded_share
+        encoded_share=$(encode_mount_component "$share_name")
+        printf '%s\n' "$MOUNT_BASE/samba-${server_safe}-${legacy_share_safe}--${encoded_share}"
+        return 0
+    fi
+
+    printf '%s\n' "$MOUNT_BASE/samba-${server_safe}-${legacy_share_safe}"
+}
+
+legacy_mount_component() {
+    local share_name="$1"
+    local share_safe="${share_name,,}"
+    share_safe="${share_safe// /_}"
+    share_safe="${share_safe//\$/}"
+    printf '%s\n' "$share_safe"
+}
+
+encode_mount_component() {
+    local input="$1"
+    local output=""
+    local i char hex
+
+    for ((i=0; i<${#input}; i++)); do
+        char="${input:i:1}"
+        case "$char" in
+            [a-zA-Z0-9._-])
+                output+="$char"
+                ;;
+            *)
+                printf -v hex '%02X' "'$char"
+                output+="%$hex"
+                ;;
+        esac
+    done
+
+    printf '%s\n' "$output"
+}
+
+share_needs_mount_disambiguation() {
+    local share_name="$1"
+    local legacy_share_safe="$2"
+    local matching_legacy_paths=0
+    local other_share other_legacy_safe
+
+    for other_share in "${SHARES[@]}"; do
+        other_legacy_safe=$(legacy_mount_component "$other_share")
+        if [[ "$other_legacy_safe" == "$legacy_share_safe" ]]; then
+            matching_legacy_paths=$((matching_legacy_paths + 1))
+        fi
+    done
+
+    if (( matching_legacy_paths <= 1 )); then
+        return 1
+    fi
+
+    # Keep the pure legacy-safe spelling unsuffixed when it exists, and
+    # disambiguate every other colliding share deterministically.
+    [[ "$share_name" != "$legacy_share_safe" ]]
+}
+
+escape_fstab_field() {
+    local field="$1"
+    field="${field//\\/\\134}"
+    field="${field//$'\t'/\\011}"
+    field="${field//$'\n'/\\012}"
+    field="${field// /\\040}"
+    printf '%s\n' "$field"
+}
+
+parse_smbclient_disk_shares() {
+    awk '
+        /^[[:space:]]*$/ { next }
+        /^[[:space:]]*Sharename[[:space:]]+Type([[:space:]]+Comment)?[[:space:]]*$/ { next }
+        /^[[:space:]-]+$/ { next }
+        {
+            line = $0
+            sub(/^[[:space:]]+/, "", line)
+            if (match(line, /[[:space:]][[:space:]]+Disk([[:space:]]|$)/)) {
+                share = substr(line, 1, RSTART - 1)
+                sub(/[[:space:]]+$/, "", share)
+                if (share != "IPC$" && share != "print$" && share != "nobody") {
+                    print share
+                }
+            }
+        }
+    '
+}
+
 
 # require_dependency is called lazily at the point of use, not globally at startup.
 # Only the operations that actually need a tool will enforce its presence.
@@ -295,7 +415,7 @@ show_usage() {
     echo "  -D, --discovered          Use discovered servers instead of default"
     echo "  --config                  Show current configuration"
     echo "  --reset-config            Reset to default configuration"
-    echo "  --fstab [CHOICE]          Generate fstab entries (with optional choice)"
+    echo "  --fstab [CHOICE]          Generate fstab entries (defaults to all shares if omitted)"
     echo "  --smb-version VER         SMB dialect version (default: $SMB_VERSION, e.g. 2.1, 3.0)"
     echo "  --debug                   Enable debug output (or set SMBMNT_DEBUG=true)"
     echo "  --dry-run                 Preview actions without executing"
@@ -331,7 +451,7 @@ show_usage() {
     echo "    smbmnt -S 192.168.0.0/24        # Scan specific network"
     echo "    smbmnt -Ss 10.8.0.1             # Scan shares on specific server"
     echo "    smbmnt -D                       # Use discovered server"
-    echo "    smbmnt --fstab                  # Generate fstab entries (optional)"
+    echo "    smbmnt --fstab                  # Generate fstab for all configured shares"
     echo "    smbmnt --fstab all              # Generate fstab for all shares"
     echo "    smbmnt --fstab 1,3              # Generate fstab for shares 1 and 3"
     echo "    smbmnt --config                 # Show current configuration"
@@ -743,13 +863,7 @@ scan_shares() {
     # 3) Parse shares
     #
     local shares
-    mapfile -t shares < <(echo "$shares_output" | \
-        grep "Disk" | \
-        awk '{print $1}' | \
-        grep -v "^$" | \
-        grep -v "IPC\$" | \
-        grep -v "print\$" | \
-        grep -v "nobody")
+    mapfile -t shares < <(printf '%s\n' "$shares_output" | parse_smbclient_disk_shares)
 
     if (( ${#shares[@]} == 0 )); then
         log_message "ERROR" "${RED}No shares found${NC}"
@@ -797,7 +911,57 @@ update_script_config() {
 _build_fstab_entry() {
     local share="$1"
     local mount_point="$2"
-    echo "//$SERVER/$share $mount_point cifs credentials=$CREDENTIALS,uid=$(id -u),gid=$(id -g),file_mode=0664,dir_mode=0775,vers=$SMB_VERSION,noexec,nofail 0 0"
+    local escaped_share_path
+    escaped_share_path=$(escape_fstab_field "//$SERVER/$share")
+    local escaped_credentials
+    escaped_credentials=$(escape_fstab_field "$CREDENTIALS")
+    printf '%s %s cifs credentials=%s,uid=%s,gid=%s,file_mode=0664,dir_mode=0775,vers=%s,noexec,nofail 0 0\n' \
+        "$escaped_share_path" "$mount_point" "$escaped_credentials" "$(id -u)" "$(id -g)" "$SMB_VERSION"
+}
+
+ensure_mount_point_exists() {
+    local mount_point="$1"
+
+    if [[ -d "$mount_point" ]]; then
+        return 0
+    fi
+
+    log_message "INFO" "${BLUE}Creating mount directory: $mount_point${NC}"
+    if ! run_maybe_sudo mkdir -p "$mount_point"; then
+        log_message "ERROR" "${RED}Failed to create mount directory: $mount_point${NC}"
+        return 1
+    fi
+
+    run_maybe_sudo chown "$REAL_USER:$REAL_USER" "$mount_point" 2>/dev/null || true
+    return 0
+}
+
+validate_fstab_candidate() {
+    local fstab_tmp="$1"
+
+    # CIFS fake-mount validation fails unprivileged on Fedora, so prefer an
+    # already-privileged path here instead of probing as the caller first.
+    if [[ "${SMBMNT_NO_SUDO:-false}" = true ]]; then
+        mount -a --fake -T "$fstab_tmp"
+        return $?
+    fi
+
+    if (( $(id -u) == 0 )); then
+        mount -a --fake -T "$fstab_tmp"
+        return $?
+    fi
+
+    if command -v sudo >/dev/null 2>&1; then
+        sudo mount -a --fake -T "$fstab_tmp"
+        return $?
+    fi
+
+    if command -v doas >/dev/null 2>&1; then
+        doas mount -a --fake -T "$fstab_tmp"
+        return $?
+    fi
+
+    mount -a --fake -T "$fstab_tmp"
 }
 
 generate_fstab() {
@@ -807,6 +971,7 @@ generate_fstab() {
     log_message "INFO" "${BLUE}Generating fstab entries...${NC}"
 
     local fstab_entries=()
+    local mount_points=()
     local share mount_point entry
 
     if [[ -z "$choice" ]]; then
@@ -816,15 +981,13 @@ generate_fstab() {
 
     if [[ "$choice" == "all" ]]; then
         for share in "${SHARES[@]}"; do
-            local share_safe="${share,,}"
-            share_safe="${share_safe// /_}"
-            share_safe="${share_safe//\$/}"
-            mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_safe}"
+            mount_point=$(build_mount_point "$share")
             if [[ "$mount_point" =~ [[:space:]] ]]; then
                 log_message "ERROR" "${RED}Invalid mount point (contains spaces): $mount_point${NC}"
                 continue
             fi
             fstab_entries+=("$(_build_fstab_entry "$share" "$mount_point")")
+            mount_points+=("$mount_point")
         done
     elif [[ "$choice" =~ ^[0-9,]+$ ]]; then
         IFS=',' read -ra CHOICES <<< "$choice"
@@ -833,15 +996,13 @@ generate_fstab() {
             local index=$((ch-1))
             if (( index >= 0 && index < ${#SHARES[@]} )); then
                 share="${SHARES[$index]}"
-                local share_safe="${share,,}"
-                share_safe="${share_safe// /_}"
-                share_safe="${share_safe//\$/}"
-                mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_safe}"
+                mount_point=$(build_mount_point "$share")
                 if [[ "$mount_point" =~ [[:space:]] ]]; then
                     log_message "ERROR" "${RED}Invalid mount point (contains spaces): $mount_point${NC}"
                     continue
                 fi
                 fstab_entries+=("$(_build_fstab_entry "$share" "$mount_point")")
+                mount_points+=("$mount_point")
             else
                 log_message "ERROR" "${RED}Invalid choice: $ch${NC}"
             fi
@@ -859,7 +1020,8 @@ generate_fstab() {
     if [[ "$dry_run" = true ]]; then
         log_message "INFO" "${CYAN}🚫 DRY RUN: Would add these fstab entries:${NC}"
         for entry in "${fstab_entries[@]}"; do
-            log_message "INFO" "${CYAN}  📄 $entry${NC}"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') [INFO]   📄 $entry" >> "$LOG_FILE"
+            printf '%b%s%b\n' "${CYAN}  📄 " "$entry" "${NC}"
         done
         log_message "INFO" "${CYAN}No changes were actually made to /etc/fstab.${NC}"
         return 0
@@ -871,8 +1033,16 @@ generate_fstab() {
     local skipped_count=0
     local error_count=0
 
-    for entry in "${fstab_entries[@]}"; do
+    local i
+    for i in "${!fstab_entries[@]}"; do
+        entry="${fstab_entries[$i]}"
+        mount_point="${mount_points[$i]}"
         if ! grep -Fxq "$entry" /etc/fstab 2>/dev/null; then
+            if ! ensure_mount_point_exists "$mount_point"; then
+                error_count=$((error_count + 1))
+                continue
+            fi
+
             # Atomic fstab update: copy → append → validate → mv into place
             # Avoids leaving fstab in a corrupt state if something goes wrong mid-write
             local fstab_tmp
@@ -884,7 +1054,7 @@ generate_fstab() {
             _SMBMNT_TMPFILES+=("$fstab_tmp")
             if run_maybe_sudo cp /etc/fstab "$fstab_tmp" && \
                echo "$entry" | run_maybe_sudo tee -a "$fstab_tmp" >/dev/null && \
-               run_maybe_sudo mount -a --fake -T "$fstab_tmp" 2>/dev/null && \
+               validate_fstab_candidate "$fstab_tmp" && \
                run_maybe_sudo mv "$fstab_tmp" /etc/fstab; then
                 log_message "INFO" "${GREEN}✓ Added to fstab: $entry${NC}"
                 added_count=$((added_count + 1))
@@ -930,10 +1100,8 @@ show_status() {
     printf "%-20s %-25s %-15s %-10s\n" "----------" "-----------" "------" "----"
 
     for share in "${SHARES[@]}"; do
-        local share_safe="${share,,}"
-        share_safe="${share_safe// /_}"
-        share_safe="${share_safe//\$/}"
-        local mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_safe}"
+        local mount_point
+        mount_point=$(build_mount_point "$share")
         if mountpoint -q "$mount_point" 2>/dev/null || grep -q " $mount_point " /proc/mounts 2>/dev/null; then
             local server_info
             server_info=$(grep " $mount_point " /proc/mounts 2>/dev/null | sed 's/.*\/\/\([^/]*\)\/.*/\1/' || true)
@@ -1077,11 +1245,8 @@ use_discovered() {
 mount_share() {
     local share_name="$1"
     local dry_run="${2:-false}"
-    # Derive a filesystem-safe mount point name: lowercase, spaces→underscores, $→empty
-    local share_safe="${share_name,,}"
-    share_safe="${share_safe// /_}"
-    share_safe="${share_safe//\$/}"
-    local mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_safe}"
+    local mount_point
+    mount_point=$(build_mount_point "$share_name")
     local share_path="//$SERVER/$share_name"
 
     # Validate share name — reject path traversal and shell metacharacters only.
@@ -1176,10 +1341,8 @@ mount_share() {
 unmount_share() {
     local share_name="$1"
     local dry_run="${2:-false}"
-    local share_safe="${share_name,,}"
-    share_safe="${share_safe// /_}"
-    share_safe="${share_safe//\$/}"
-    local mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_safe}"
+    local mount_point
+    mount_point=$(build_mount_point "$share_name")
 
     if [[ -z "$share_name" ]] || [[ ${#share_name} -gt 255 ]]; then
         log_message "ERROR" "${RED}Share name empty or too long: $share_name${NC}"
@@ -1361,8 +1524,7 @@ list_shares() {
 
         # Parse server share list
         if [[ -n "$server_shares_output" ]]; then
-            mapfile -t server_shares < <(echo "$server_shares_output" | \
-                grep "Disk" | awk '{print $1}' | grep -v "^$" | grep -v "IPC\$" | grep -v "print\$" | grep -v "nobody")
+            mapfile -t server_shares < <(printf '%s\n' "$server_shares_output" | parse_smbclient_disk_shares)
         fi
     fi
 
@@ -1375,10 +1537,7 @@ list_shares() {
     for i in "${!SHARES[@]}"; do
         local share="${SHARES[$i]}"
         local mount_point
-        local share_safe="${share,,}"
-        share_safe="${share_safe// /_}"
-        share_safe="${share_safe//\$/}"
-        mount_point="$MOUNT_BASE/samba-${SERVER//./-}-${share_safe}"
+        mount_point=$(build_mount_point "$share")
         local status=""
         local size_info=""
         local warn_dir=""
@@ -1479,21 +1638,23 @@ process_choices() {
     # Handle comma-separated numeric choices
     if [[ "$choice" =~ ^[0-9,]+$ ]]; then
         IFS=',' read -ra CHOICES <<< "$choice"
+        local had_errors=0
         for ch in "${CHOICES[@]}"; do
             ch=$(echo "$ch" | tr -d ' ')
             local index=$((ch-1))
 
             if (( index >= 0 && index < ${#SHARES[@]} )); then
                 if [[ "$action" == "mount" ]]; then
-                    mount_share "${SHARES[$index]}" "$dry_run"
+                    mount_share "${SHARES[$index]}" "$dry_run" || had_errors=1
                 else
-                    unmount_share "${SHARES[$index]}" "$dry_run"
+                    unmount_share "${SHARES[$index]}" "$dry_run" || had_errors=1
                 fi
             else
                 log_message "ERROR" "${RED}Invalid choice: $ch${NC}"
+                had_errors=1
             fi
         done
-        return 0
+        return "$had_errors"
     fi
 
     # Invalid input

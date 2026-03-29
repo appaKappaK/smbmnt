@@ -1,4 +1,4 @@
-.TH SMBMNT 1 "2026-02-26" "smbmnt 3.2.1" "User Commands"
+.TH SMBMNT 1 "2026-03-29" "smbmnt 3.2.1" "User Commands"
 .SH NAME
 smbmnt \- interactive SMB/CIFS share mount manager with network discovery
 .SH SYNOPSIS
@@ -56,7 +56,10 @@ Base directory under which mount points are created.
 Default is
 .IR /mnt .
 Mount points are named
-.IR /mnt/samba-<server>-<share> .
+.IR /mnt/samba-<server>-<share>
+by default, with a deterministic encoded suffix added when needed to avoid
+collisions between distinct share names that would otherwise normalize to the
+same local path.
 Can also be set persistently via the saved configuration.
 .SS "Mount Operations"
 .TP
@@ -136,7 +139,7 @@ entries for the selected shares.
 .I CHOICE
 follows the same syntax as for mounting. Omitting
 .I CHOICE
-enters interactive selection. Generated entries include the
+currently defaults to all configured shares. Generated entries include the
 .B nofail
 option so that a missing share does not prevent boot.
 .SS "Dry-run & Debug"
@@ -269,8 +272,10 @@ Format is
 per line; hostname may be empty.
 .TP
 .IR /mnt/samba- < server >- < share >
-Default mount point created for each share. The server component prevents
-collisions when mounting shares from multiple hosts.
+Default mount point pattern created for each share. The server component
+prevents collisions when mounting shares from multiple hosts, and a
+deterministic encoded suffix may be added when distinct share names would
+otherwise map to the same local path.
 .SH ENVIRONMENT
 .TP
 .B SMBMNT_DEBUG
@@ -342,6 +347,11 @@ Success.
 .TP
 .B 1
 An error occurred (invalid argument, missing dependency, failed mount, etc.).
+.TP
+.B 130
+Interrupted by
+.B Ctrl+C
+.RB ( SIGINT ).
 .SH BUGS
 Report bugs at
 .I https://github.com/appaKappaK/smbmnt/issues
