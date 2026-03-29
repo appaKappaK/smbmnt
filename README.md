@@ -52,8 +52,7 @@ domain=your_domain
 Then lock it down:
 
 ```bash
-# Restrict the credentials file to your user only
-chmod 600 ~/.smbcredentials
+chmod 600 ~/.smbcredentials  # Restrict the credentials file to your user only
 ```
 
 ## Installation
@@ -61,12 +60,9 @@ chmod 600 ~/.smbcredentials
 ### Quick install
 
 ```bash
-# Clone the repository
-git clone https://github.com/appaKappaK/smbmnt.git
-# Enter the project directory
-cd smbmnt
-# Install the script and man page under /usr/local
-sudo make install
+git clone https://github.com/appaKappaK/smbmnt.git  # Clone the repository
+cd smbmnt                                           # Enter the project directory
+sudo make install                                  # Install the script and man page under /usr/local
 ```
 
 `make install` installs:
@@ -78,43 +74,32 @@ sudo make install
 To install under `/usr` instead:
 
 ```bash
-# Install under /usr instead of /usr/local
-sudo make PREFIX=/usr install
+sudo make PREFIX=/usr install  # Install under /usr instead of /usr/local
 ```
 
 ### Manual install
 
 ```bash
-# Install the executable
-sudo install -m 755 smbmnt-stable /usr/local/bin/smbmnt
-# Create the man1 directory if needed
-sudo install -d /usr/local/share/man/man1
-# Install the man page
-sudo install -m 644 smbmnt.1 /usr/local/share/man/man1/smbmnt.1
-# Compress the man page for the standard manpath layout
-sudo gzip -f /usr/local/share/man/man1/smbmnt.1
+sudo install -m 755 smbmnt-stable /usr/local/bin/smbmnt          # Install the executable
+sudo install -d /usr/local/share/man/man1                        # Create the man1 directory if needed
+sudo install -m 644 smbmnt.1 /usr/local/share/man/man1/smbmnt.1  # Install the man page
+sudo gzip -f /usr/local/share/man/man1/smbmnt.1                  # Compress the man page for the standard manpath layout
 ```
 
 ### Dependency check
 
 ```bash
-# Verify the expected runtime tools are available
-make check
+make check  # Verify the expected runtime tools are available
 ```
 
 ## Quick start
 
 ```bash
-# Scan shares on a server and save the result into config
-smbmnt -Ss 10.8.0.1
-# Mount all configured shares
-sudo smbmnt all
-# List shares with mount and existence status
-smbmnt -ls
-# Show the mount dashboard
-smbmnt -st
-# Inspect the active config
-smbmnt --config
+smbmnt -Ss 10.8.0.1  # Scan shares on a server and save the result into config
+sudo smbmnt all      # Mount all configured shares
+smbmnt -ls           # List shares with mount and existence status
+smbmnt -st           # Show the mount dashboard
+smbmnt --config      # Inspect the active config
 ```
 
 ## Usage
@@ -122,14 +107,10 @@ smbmnt --config
 ### Discovery
 
 ```bash
-# Auto-detect a private network and scan it for SMB servers
-smbmnt -S
-# Scan a specific network range
-smbmnt -S 192.168.0.0/24
-# Scan shares on one known server and optionally save them
-smbmnt -Ss 10.8.0.1
-# Pick from previously discovered servers
-smbmnt -D
+smbmnt -S                # Auto-detect a private network and scan it for SMB servers
+smbmnt -S 192.168.0.0/24 # Scan a specific network range
+smbmnt -Ss 10.8.0.1      # Scan shares on one known server and optionally save them
+smbmnt -D                # Pick from previously discovered servers
 ```
 
 Notes:
@@ -142,65 +123,43 @@ Notes:
 ### Mounting
 
 ```bash
-# Interactive mount mode
-smbmnt
-# Mount share 1
-smbmnt 1
-# Mount several shares by index
-smbmnt 1,3,5
-# Mount every configured share
-smbmnt all
-# Preview the mount actions without executing them
-smbmnt --dry-run all
+smbmnt                 # Interactive mount mode
+smbmnt 1               # Mount share 1
+smbmnt 1,3,5           # Mount several shares by index
+smbmnt all             # Mount every configured share
+smbmnt --dry-run all   # Preview the mount actions without executing them
 ```
 
 ### Unmounting
 
 ```bash
-# Interactive unmount mode
-smbmnt -u
-# Unmount share 1
-smbmnt -u 1
-# Unmount every configured share
-smbmnt -u all
-# Standalone unmount command form
-smbmnt unmount 2
-# Preview the unmount actions without executing them
-smbmnt --dry-run -u all
+smbmnt -u               # Interactive unmount mode
+smbmnt -u 1             # Unmount share 1
+smbmnt -u all           # Unmount every configured share
+smbmnt unmount 2        # Standalone unmount command form
+smbmnt --dry-run -u all # Preview the unmount actions without executing them
 ```
 
 ### Status and configuration
 
 ```bash
-# List configured shares with live existence and mount status
-smbmnt -ls
-# Show the mount dashboard
-smbmnt -st
-# Show the active configuration
-smbmnt --config
-# Reset saved config back to built-in defaults
-smbmnt --reset-config
-# Override the server for the current run
-smbmnt -ip 10.8.0.1
-# Use a different credentials file for the current run
-smbmnt -c /path/to/creds
-# Change the base mount directory for the current run
-smbmnt --mount-base /media/smb
-# Force an older SMB dialect for compatibility
-smbmnt --smb-version 2.1
+smbmnt -ls                      # List configured shares with live existence and mount status
+smbmnt -st                      # Show the mount dashboard
+smbmnt --config                 # Show the active configuration
+smbmnt --reset-config           # Reset saved config back to built-in defaults
+smbmnt -ip 10.8.0.1             # Override the server for the current run
+smbmnt -c /path/to/creds        # Use a different credentials file for the current run
+smbmnt --mount-base /media/smb  # Change the base mount directory for the current run
+smbmnt --smb-version 2.1        # Force an older SMB dialect for compatibility
 ```
 
 ### Fstab generation
 
 ```bash
-# Preview fstab entries for all configured shares
-smbmnt --dry-run --fstab all
-# Write fstab entries for all configured shares
-smbmnt --fstab all
-# Write fstab entries for specific share indexes
-smbmnt --fstab 1,2
-# Use the default fstab selection behavior
-smbmnt --fstab
+smbmnt --dry-run --fstab all  # Preview fstab entries for all configured shares
+smbmnt --fstab all            # Write fstab entries for all configured shares
+smbmnt --fstab 1,2            # Write fstab entries for specific share indexes
+smbmnt --fstab                # Use the default fstab selection behavior
 ```
 
 Notes:
@@ -215,14 +174,10 @@ Notes:
 ### Debug and environment flags
 
 ```bash
-# Run a mount operation with debug logging enabled
-smbmnt --debug all
-# Enable debug logging via environment variable
-SMBMNT_DEBUG=true smbmnt -S
-# Disable sudo/doas fallback completely
-SMBMNT_NO_SUDO=true smbmnt all
-# Prefer sudo/doas even if an unprivileged attempt might work
-SMBMNT_PREFER_SUDO=true smbmnt all
+smbmnt --debug all                  # Run a mount operation with debug logging enabled
+SMBMNT_DEBUG=true smbmnt -S         # Enable debug logging via environment variable
+SMBMNT_NO_SUDO=true smbmnt all      # Disable sudo/doas fallback completely
+SMBMNT_PREFER_SUDO=true smbmnt all  # Prefer sudo/doas even if an unprivileged attempt might work
 ```
 
 ## Behavior notes
