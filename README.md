@@ -26,7 +26,7 @@ mounting footguns.
 
 | Tool | When Required |
 |------|---------------|
-| `bash` 4+ | Always |
+| `bash 4+` | Always |
 | `mountpoint` | Always (`util-linux`) |
 | `mount.cifs` | Mount / unmount operations (`cifs-utils`) |
 | `smbclient` | Share scanning and live existence checks |
