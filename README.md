@@ -52,6 +52,7 @@ domain=your_domain
 Then lock it down:
 
 ```bash
+# Restrict the credentials file to your user only
 chmod 600 ~/.smbcredentials
 ```
 
@@ -60,8 +61,11 @@ chmod 600 ~/.smbcredentials
 ### Quick install
 
 ```bash
+# Clone the repository
 git clone https://github.com/appaKappaK/smbmnt.git
+# Enter the project directory
 cd smbmnt
+# Install the script and man page under /usr/local
 sudo make install
 ```
 
@@ -74,32 +78,43 @@ sudo make install
 To install under `/usr` instead:
 
 ```bash
+# Install under /usr instead of /usr/local
 sudo make PREFIX=/usr install
 ```
 
 ### Manual install
 
 ```bash
+# Install the executable
 sudo install -m 755 smbmnt-stable /usr/local/bin/smbmnt
+# Create the man1 directory if needed
 sudo install -d /usr/local/share/man/man1
+# Install the man page
 sudo install -m 644 smbmnt.1 /usr/local/share/man/man1/smbmnt.1
+# Compress the man page for the standard manpath layout
 sudo gzip -f /usr/local/share/man/man1/smbmnt.1
 ```
 
 ### Dependency check
 
 ```bash
+# Verify the expected runtime tools are available
 make check
 ```
 
 ## Quick start
 
 ```bash
-smbmnt -Ss 10.8.0.1      # scan shares on a server and save config
-sudo smbmnt all          # mount all configured shares
-smbmnt -ls               # list shares with mount/existence status
-smbmnt -st               # show mount dashboard
-smbmnt --config          # inspect active config
+# Scan shares on a server and save the result into config
+smbmnt -Ss 10.8.0.1
+# Mount all configured shares
+sudo smbmnt all
+# List shares with mount and existence status
+smbmnt -ls
+# Show the mount dashboard
+smbmnt -st
+# Inspect the active config
+smbmnt --config
 ```
 
 ## Usage
@@ -107,9 +122,13 @@ smbmnt --config          # inspect active config
 ### Discovery
 
 ```bash
+# Auto-detect a private network and scan it for SMB servers
 smbmnt -S
+# Scan a specific network range
 smbmnt -S 192.168.0.0/24
+# Scan shares on one known server and optionally save them
 smbmnt -Ss 10.8.0.1
+# Pick from previously discovered servers
 smbmnt -D
 ```
 
@@ -123,48 +142,70 @@ Notes:
 ### Mounting
 
 ```bash
+# Interactive mount mode
 smbmnt
+# Mount share 1
 smbmnt 1
+# Mount several shares by index
 smbmnt 1,3,5
+# Mount every configured share
 smbmnt all
+# Preview the mount actions without executing them
 smbmnt --dry-run all
 ```
 
 ### Unmounting
 
 ```bash
+# Interactive unmount mode
 smbmnt -u
+# Unmount share 1
 smbmnt -u 1
+# Unmount every configured share
 smbmnt -u all
+# Standalone unmount command form
 smbmnt unmount 2
+# Preview the unmount actions without executing them
 smbmnt --dry-run -u all
 ```
 
 ### Status and configuration
 
 ```bash
+# List configured shares with live existence and mount status
 smbmnt -ls
+# Show the mount dashboard
 smbmnt -st
+# Show the active configuration
 smbmnt --config
+# Reset saved config back to built-in defaults
 smbmnt --reset-config
+# Override the server for the current run
 smbmnt -ip 10.8.0.1
+# Use a different credentials file for the current run
 smbmnt -c /path/to/creds
+# Change the base mount directory for the current run
 smbmnt --mount-base /media/smb
+# Force an older SMB dialect for compatibility
 smbmnt --smb-version 2.1
 ```
 
 ### Fstab generation
 
 ```bash
+# Preview fstab entries for all configured shares
 smbmnt --dry-run --fstab all
+# Write fstab entries for all configured shares
 smbmnt --fstab all
+# Write fstab entries for specific share indexes
 smbmnt --fstab 1,2
+# Use the default fstab selection behavior
 smbmnt --fstab
 ```
 
 Notes:
 
-- `--fstab` without a choice currently defaults to all configured shares.
+- `--fstab` without a choice defaults to all configured shares.
 - The script validates a temporary `fstab` candidate before replacing
   `/etc/fstab`.
 - On Fedora and similar systems, validation is performed through a privileged
@@ -174,9 +215,13 @@ Notes:
 ### Debug and environment flags
 
 ```bash
+# Run a mount operation with debug logging enabled
 smbmnt --debug all
+# Enable debug logging via environment variable
 SMBMNT_DEBUG=true smbmnt -S
+# Disable sudo/doas fallback completely
 SMBMNT_NO_SUDO=true smbmnt all
+# Prefer sudo/doas even if an unprivileged attempt might work
 SMBMNT_PREFER_SUDO=true smbmnt all
 ```
 
