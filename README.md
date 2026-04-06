@@ -31,6 +31,7 @@ mounting footguns.
 | `mount.cifs` | Mount / unmount operations (`cifs-utils`) |
 | `smbclient` | Share scanning and live existence checks |
 | `nmap` | Network scanning |
+| `gawk` | Proccessing Data |
 
 ### Permissions
 
